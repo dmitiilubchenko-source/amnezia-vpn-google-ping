@@ -4,6 +4,8 @@
 #include <QTimer>
 #include <QVariantList>
 #include <functional>
+#include <QElapsedTimer>
+#include <QSet>
 
 class BenchmarkBackend : public QObject {
     Q_OBJECT
@@ -20,6 +22,8 @@ public:
                       quint64 requestId, std::shared_ptr<std::atomic_bool> cancelled) = 0;
     virtual void connectVpn() = 0;
     virtual void disconnectVpn() = 0;
+    virtual QVariantMap preferences(const QString &) const { return {}; }
+    virtual void savePreferences(const QString &, const QVariantMap &) {}
 signals:
     void changed();
     void referenceResolved(quint64 requestId, const QHostAddress &address);
@@ -34,6 +38,10 @@ class PremiumBenchmarkController : public QObject {
     Q_PROPERTY(QString status READ status NOTIFY changed)
     Q_PROPERTY(QString currentCountry READ currentCountry NOTIFY changed)
     Q_PROPERTY(QVariantList ranking READ ranking NOTIFY changed)
+    Q_PROPERTY(int favoriteCount READ favoriteCount NOTIFY changed)
+    Q_PROPERTY(QVariantMap recommendation READ recommendation NOTIFY changed)
+    Q_PROPERTY(double overallProgress READ overallProgress NOTIFY progressChanged)
+    Q_PROPERTY(QString progressText READ progressText NOTIFY progressChanged)
 public:
     using ProbeFactory = std::function<BenchmarkProbe *(QObject *)>;
     PremiumBenchmarkController(BenchmarkBackend *backend, QObject *parent = nullptr, ProbeFactory factory = {}, int settleMsecs = 2000);
@@ -44,16 +52,29 @@ public:
     QString status() const { return m_status; }
     QString currentCountry() const { return m_backend->country(m_serverId); }
     QVariantList ranking() const;
+    int favoriteCount() const { return m_favorites.size(); }
+    QVariantMap recommendation() const;
+    double overallProgress() const;
+    QString progressText() const;
 public slots:
     void refresh(const QString &serverId);
     void startAll();
     void checkCurrent();
+    void startFavorites();
+    void checkCountry(const QString &countryCode);
+    void toggleFavorite(const QString &countryCode);
     void stop();
 signals:
     void changed();
+    void progressChanged();
 private:
     enum Phase { Idle, Resolving, Disconnecting, Loading, Connecting, Settling, Measuring };
-    void begin(bool single);
+    enum Mode { AllCountries, FavoriteCountries, OneCountry, CurrentCountry };
+    void begin(Mode mode, const QString &countryCode = {});
+    void loadSaved();
+    void save();
+    void mergeCountries();
+    int estimatedSecondsRemaining() const;
     void prepareTarget();
     void loadTarget();
     void onConnectionChanged();
@@ -75,11 +96,17 @@ private:
     ProbeFactory m_factory;
     int m_settleMsecs;
     QTimer m_timeout;
+    QTimer m_progressTimer;
+    QElapsedTimer m_visitClock;
     Phase m_phase = Idle;
     QString m_serverId, m_originalCountry, m_originalProtocol, m_measureProtocol, m_status;
+    QString m_runId, m_latestRunId;
+    QSet<QString> m_favorites, m_restored;
     QVariantList m_rows;
     QStringList m_order;
     int m_cursor = 0;
+    int m_completedVisits = 0, m_totalVisits = 0, m_expectedDetailed = 0, m_probeSent = 0;
+    double m_connectionSeconds = 8;
     quint64 m_requestId = 0;
     bool m_single = false, m_detailed = false, m_originalConnected = false, m_restoring = false, m_stopping = false;
     QHostAddress m_reference;

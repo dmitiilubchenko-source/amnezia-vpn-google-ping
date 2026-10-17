@@ -242,7 +242,7 @@ void CoreController::initControllers()
     setQmlContextProperty("PremiumLatencyController", premiumLatencyController);
     premiumLatencyController->setAppSettings(m_appSettingsRepository);
     auto *benchmarkBackend = new AmneziaBenchmarkBackend(m_serversRepository, m_appSettingsRepository,
-        m_connectionController, m_connectionUiController, m_subscriptionController, this);
+        m_connectionController, m_connectionUiController, m_subscriptionController, m_settings, this);
     auto *benchmarkController = new PremiumBenchmarkController(benchmarkBackend, this);
     setQmlContextProperty("BenchmarkController", benchmarkController);
     connect(m_serversUiController, &ServersUiController::processedServerIdChanged, premiumLatencyController,

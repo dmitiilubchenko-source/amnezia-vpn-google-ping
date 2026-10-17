@@ -13,7 +13,10 @@ The client and these modifications are distributed under the **GNU GPL version 3
 - Checks that the test uses the VPN route; stops when the active subscription or relevant settings change.
 - Cancellation and attempted restoration of the original location, protocol, and connection state.
 - A thirty-request measurement of the current connection without switching countries.
-- Russian interface strings and a visible v4 marker on the Google Ping & Rank page.
+- Favorites, a favorites-only view and thirty-request tests of selected countries.
+- Encrypted local per-subscription persistence of the latest country results and favorites, dated history labels, a 24-hour stale marker and a leader from the latest detailed check. No automatic connection changes based on that recommendation.
+- Overall progress and an approximate remaining time; separate test runs are visibly distinguished.
+- Russian interface strings and a visible v5 marker on the Google Ping & Rank page.
 - An explicit message when another client instance prevents this build from starting.
 - Automated tests, dependency lockfile, build instructions and scripts. Earlier diagnostic ICMP/HTTPS modules remain in the source.
 
@@ -21,4 +24,4 @@ Premium authentication and subscription requirements are unchanged. Users supply
 
 Source for the modified application is in this repository and in the source asset attached to the same release as the Windows binary. The source asset includes initialized third-party submodules, unlike GitHub's automatic source ZIP. Build scripts and configuration are in [BUILD-GOOGLE-PING.md](BUILD-GOOGLE-PING.md) and `tools/`; dependency recipes and source URLs are included in `recipes/`.
 
-The v3 Windows artifact was compiled from upstream de93650 plus its changes; v4 was compiled from fork commit 2def035 plus the v4 changes before its publication commit was created. The source asset on each release contains that release's changes. Byte-for-byte reproduction also depends on timestamps, toolchains and downloaded packages. Previous releases and tags are retained.
+The v3 Windows artifact was compiled from upstream de93650 plus its changes; v4 was compiled from fork commit 2def035 plus the v4 changes; v5 was compiled from fork commit 000728d plus the v5 changes, before their respective publication commits were created. The source asset on each release contains that release's changes. Byte-for-byte reproduction also depends on timestamps, toolchains and downloaded packages. Previous releases and tags are retained.

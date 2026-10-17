@@ -22,6 +22,36 @@ PageType {
     property bool subscriptionExpiringSoon: false
     property bool isSubscriptionRenewalAvailable: false
     property bool isInAppPurchase: false
+    property bool favoritesOnly: false
+    property string confirmedAction: "all"
+    property string confirmedCountry: ""
+    property string confirmedCountryName: ""
+
+    function confirmTest(action, code, name) {
+        root.confirmedAction = action
+        root.confirmedCountry = code || ""
+        root.confirmedCountryName = name || ""
+        benchmarkConfirmation.open()
+    }
+
+    function dateText(value) {
+        return value ? Qt.formatDateTime(new Date(value), "dd.MM HH:mm") : ""
+    }
+
+    function dateLabel(measurement) {
+        if (!measurement || !measurement.checkedAtUtc) return ""
+        return (measurement.stale ? qsTr("Outdated: %1") : measurement.historical ? qsTr("Earlier check: %1")
+            : measurement.saved ? qsTr("Saved: %1") : qsTr("Checked: %1")).arg(dateText(measurement.checkedAtUtc))
+    }
+
+    function recommendationText() {
+        const result = BenchmarkController.recommendation
+        if (!result || !result.countryCode) return ""
+        const label = result.saved ? qsTr("Saved leader: %1") : qsTr("Best in the latest check: %1")
+        return label.arg(result.countryName) + "\n"
+            + qsTr("Median %1 · P95 %2 · loss %3%").arg(timeText(result.medianMs)).arg(timeText(result.p95Ms)).arg(numberText(result.loss))
+            + (result.saved ? "\n" + qsTr("%1 · recheck if your network changed").arg(dateText(result.checkedAtUtc)) : "")
+    }
 
     function numberText(value) {
         return Number(value).toFixed(1).replace(/\.0$/, "")
@@ -41,12 +71,14 @@ PageType {
                     .arg(numberText(measurement.loss)).arg(measurement.replies).arg(measurement.sent)
                 + "\n" + qsTr("%1 · %2 requests · %3").arg(label).arg(measurement.sent).arg(measurement.protocol || "")
                 + (measurement.replies < 3 ? "\n" + qsTr("Few replies: low confidence") : "")
+                + (measurement.checkedAtUtc ? "\n" + dateLabel(measurement) : "")
         }
         if (state === "checking") return qsTr("Checking ping...")
-        if (state === "timeout") return qsTr("No Google ping reply")
-        if (state === "connectionError") return qsTr("VPN connection failed")
-        if (state === "apiError") return qsTr("Could not load this location")
-        if (state === "routeError") return qsTr("Could not verify the VPN route")
+        const stamp = measurement && measurement.checkedAtUtc ? "\n" + dateLabel(measurement) : ""
+        if (state === "timeout") return qsTr("No Google ping reply") + stamp
+        if (state === "connectionError") return qsTr("VPN connection failed") + stamp
+        if (state === "apiError") return qsTr("Could not load this location") + stamp
+        if (state === "routeError") return qsTr("Could not verify the VPN route") + stamp
         if (state === "tlsError") return qsTr("TLS verification failed")
         if (state === "networkError" || state === "httpError") return qsTr("HTTPS test failed")
         if (state === "dnsError") return qsTr("Could not resolve server address")
@@ -116,7 +148,11 @@ PageType {
             }
             ParagraphTextType {
                 Layout.fillWidth: true
-                text: qsTr("Two stages: 5 Google pings per location, then 30 pings for the best 5. The VPN will reconnect; internet and this chat may disconnect. The test attempts to restore the original connection. You can stop it.")
+                text: root.confirmedAction === "favorites"
+                    ? qsTr("Check %1 favorite locations with 30 requests each? The VPN will reconnect; internet and chat may disconnect. The test attempts to restore the original connection.").arg(BenchmarkController.favoriteCount)
+                    : root.confirmedAction === "country"
+                    ? qsTr("Check %1 with 30 requests? The VPN will reconnect; internet and chat may disconnect. The test attempts to restore the original connection.").arg(root.confirmedCountryName)
+                    : qsTr("Two stages: 5 Google pings per location, then 30 pings for the best 5. The VPN will reconnect; internet and this chat may disconnect. The test attempts to restore the original connection. You can stop it.")
             }
             BasicButtonType {
                 Layout.fillWidth: true
@@ -129,7 +165,11 @@ PageType {
                 clickedFunc: function() { benchmarkConfirmation.reject() }
             }
         }
-        onAccepted: BenchmarkController.startAll()
+        onAccepted: {
+            if (root.confirmedAction === "favorites") BenchmarkController.startFavorites()
+            else if (root.confirmedAction === "country") BenchmarkController.checkCountry(root.confirmedCountry)
+            else BenchmarkController.startAll()
+        }
     }
 
     Connections {
@@ -170,7 +210,9 @@ PageType {
 
         anchors.fill: parent
 
-        model: PremiumLatencyController.isPremium ? BenchmarkController.ranking : ApiCountryModel
+        model: PremiumLatencyController.isPremium ? BenchmarkController.ranking.filter(function(row) {
+            return !root.favoritesOnly || row.favorite
+        }) : ApiCountryModel
 
         currentIndex: PremiumLatencyController.isPremium ? -1 : ApiCountryModel.currentIndex
 
@@ -270,19 +312,82 @@ PageType {
                 text: BenchmarkController.busy ? qsTr("Stop test") : qsTr("Check all locations · Google")
                 clickedFunc: function() {
                     if (BenchmarkController.busy) BenchmarkController.stop()
-                    else benchmarkConfirmation.open()
+                    else root.confirmTest("all")
                 }
             }
 
-            BasicButtonType {
+            RowLayout {
                 visible: PremiumLatencyController.supported && PremiumLatencyController.isPremium
                 Layout.fillWidth: true
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
                 Layout.topMargin: 8
-                enabled: BenchmarkController.canMeasure
-                text: qsTr("Current location · 30 pings")
-                clickedFunc: function() { BenchmarkController.checkCurrent() }
+                spacing: 8
+                BasicButtonType {
+                    objectName: "checkFavoritesButton"
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: 1
+                    enabled: BenchmarkController.canStart && BenchmarkController.favoriteCount > 0
+                    buttonTextLabel.font.pixelSize: 14
+                    text: qsTr("Favorites (%1)").arg(BenchmarkController.favoriteCount)
+                    clickedFunc: function() { root.confirmTest("favorites") }
+                }
+                BasicButtonType {
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: 1
+                    enabled: BenchmarkController.canMeasure
+                    buttonTextLabel.font.pixelSize: 14
+                    text: qsTr("Current · 30 pings")
+                    clickedFunc: function() { BenchmarkController.checkCurrent() }
+                }
+            }
+
+            CheckBox {
+                objectName: "favoritesOnlyCheckBox"
+                visible: PremiumLatencyController.supported && PremiumLatencyController.isPremium
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                enabled: !BenchmarkController.busy
+                checked: root.favoritesOnly
+                text: qsTr("Show favorites only")
+                palette.windowText: AmneziaStyle.color.paleGray
+                font.pixelSize: 14
+                onToggled: root.favoritesOnly = checked
+            }
+
+            CaptionTextType {
+                visible: PremiumLatencyController.isPremium && root.recommendationText() !== ""
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                Layout.topMargin: 4
+                color: AmneziaStyle.color.goldenApricot
+                text: root.recommendationText()
+            }
+
+            ProgressBar {
+                id: overallBar
+                visible: PremiumLatencyController.isPremium && BenchmarkController.busy
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                Layout.topMargin: 8
+                padding: 0
+                value: BenchmarkController.overallProgress
+                background: Rectangle { implicitHeight: 6; radius: 3; color: AmneziaStyle.color.charcoalGray }
+                contentItem: Item {
+                    implicitHeight: 6
+                    Rectangle { width: parent.width * overallBar.visualPosition; height: parent.height; radius: 3; color: AmneziaStyle.color.goldenApricot }
+                }
+            }
+
+            CaptionTextType {
+                visible: PremiumLatencyController.isPremium && BenchmarkController.busy
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                text: BenchmarkController.progressText
+                color: AmneziaStyle.color.mutedGray
             }
 
             CaptionTextType {
@@ -303,7 +408,7 @@ PageType {
                 Layout.topMargin: 8
                 Layout.bottomMargin: 12
                 color: AmneziaStyle.color.mutedGray
-                text: qsTr("v4 · Detailed results first; then quick estimates. Sorted by loss, P95, median and variation. P95: 95% of replies were no slower. App split tunneling must be off; Google must use VPN.")
+                text: qsTr("v5 · Star: favorites. Arrows: recheck 30 pings. Latest check first, earlier results dated below. Sorted by loss, P95, median and variation. App split tunneling must be off; Google must use VPN.")
             }
         }
 
@@ -362,11 +467,54 @@ PageType {
                     }
                 }
 
-                Image {
-                    Layout.rightMargin: 32
-                    Layout.alignment: Qt.AlignRight
-
-                    source: content.flagCode !== "" ? "qrc:/countriesFlags/images/flagKit/" + content.flagCode + ".svg" : ""
+                ColumnLayout {
+                    Layout.rightMargin: 16
+                    Layout.alignment: Qt.AlignVCenter
+                    spacing: 2
+                    Image {
+                        Layout.alignment: Qt.AlignHCenter
+                        source: content.flagCode !== "" ? "qrc:/countriesFlags/images/flagKit/" + content.flagCode + ".svg" : ""
+                    }
+                    ToolButton {
+                        id: favoriteButton
+                        objectName: "favorite-" + content.locationCode
+                        visible: PremiumLatencyController.supported && PremiumLatencyController.isPremium
+                        enabled: !BenchmarkController.busy
+                        implicitWidth: 36; implicitHeight: 32
+                        Accessible.name: PremiumLatencyController.isPremium && modelData.favorite ? qsTr("Remove from favorites") : qsTr("Add to favorites")
+                        ToolTip.visible: hovered
+                        ToolTip.text: Accessible.name
+                        background: Rectangle { radius: 8; color: favoriteButton.hovered ? AmneziaStyle.color.charcoalGray : "transparent" }
+                        contentItem: Image {
+                            source: PremiumLatencyController.isPremium && modelData.favorite
+                                ? "qrc:/images/controls/star-filled.svg" : "qrc:/images/controls/star.svg"
+                            fillMode: Image.PreserveAspectFit
+                            sourceSize.width: 22; sourceSize.height: 22
+                            opacity: favoriteButton.enabled ? 1 : 0.35
+                        }
+                        onClicked: BenchmarkController.toggleFavorite(content.locationCode)
+                    }
+                    ToolButton {
+                        id: recheckButton
+                        objectName: "recheck-" + content.locationCode
+                        visible: PremiumLatencyController.supported && PremiumLatencyController.isPremium
+                        enabled: BenchmarkController.canStart
+                        implicitWidth: 36; implicitHeight: 32
+                        Accessible.name: qsTr("Recheck this location with 30 pings")
+                        ToolTip.visible: hovered
+                        ToolTip.text: Accessible.name
+                        background: Rectangle { radius: 8; color: recheckButton.hovered ? AmneziaStyle.color.charcoalGray : "transparent" }
+                        contentItem: Image {
+                            source: "qrc:/images/controls/refresh-cw.svg"
+                            fillMode: Image.PreserveAspectFit
+                            sourceSize.width: 20; sourceSize.height: 20
+                            opacity: recheckButton.enabled ? 1 : 0.25
+                        }
+                        onClicked: {
+                            if (BenchmarkController.canMeasure && content.locationCode === BenchmarkController.currentCountry) BenchmarkController.checkCurrent()
+                            else root.confirmTest("country", content.locationCode, content.locationName)
+                        }
+                    }
                 }
             }
 

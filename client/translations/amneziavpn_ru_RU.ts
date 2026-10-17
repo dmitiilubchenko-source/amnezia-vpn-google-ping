@@ -3660,6 +3660,78 @@ Create one from the current settings.</source>
         <source>v4 · Detailed results first; then quick estimates. Sorted by loss, P95, median and variation. P95: 95% of replies were no slower. App split tunneling must be off; Google must use VPN.</source>
         <translation>v4 · Подробные результаты сверху, затем быстрые оценки. Порядок: потери, P95, медиана, разброс. P95: 95% ответов были не медленнее. Выключите раздельное туннелирование приложений; Google должен идти через VPN.</translation>
     </message>
+    <message>
+        <source>Saved leader: %1</source>
+        <translation>Сохранённый лидер: %1</translation>
+    </message>
+    <message>
+        <source>Best in the latest check: %1</source>
+        <translation>Лидер последней проверки: %1</translation>
+    </message>
+    <message>
+        <source>Median %1 · P95 %2 · loss %3%</source>
+        <translation>Медиана %1 · P95 %2 · потери %3%</translation>
+    </message>
+    <message>
+        <source>%1 · recheck if your network changed</source>
+        <translation>%1 · при смене сети перепроверьте</translation>
+    </message>
+    <message>
+        <source>Outdated: %1</source>
+        <translation>Устарело: %1</translation>
+    </message>
+    <message>
+        <source>Earlier check: %1</source>
+        <translation>Предыдущая проверка: %1</translation>
+    </message>
+    <message>
+        <source>Saved: %1</source>
+        <translation>Сохранено: %1</translation>
+    </message>
+    <message>
+        <source>Checked: %1</source>
+        <translation>Замер: %1</translation>
+    </message>
+    <message>
+        <source>Check %1 favorite locations with 30 requests each? The VPN will reconnect; internet and chat may disconnect. The test attempts to restore the original connection.</source>
+        <translation>Проверить избранные страны (%1) — по 30 запросов? VPN будет переподключаться, интернет и чат могут отключаться. В конце приложение попробует вернуть исходное подключение.</translation>
+    </message>
+    <message>
+        <source>Check %1 with 30 requests? The VPN will reconnect; internet and chat may disconnect. The test attempts to restore the original connection.</source>
+        <translation>Проверить %1 — 30 запросов? VPN переподключится, интернет и чат могут отключаться. В конце приложение попробует вернуть исходное подключение.</translation>
+    </message>
+    <message>
+        <source>Favorites (%1)</source>
+        <translation>Избранные (%1)</translation>
+    </message>
+    <message>
+        <source>Current · 30 pings</source>
+        <translation>Текущая · 30</translation>
+    </message>
+    <message>
+        <source>Show favorites only</source>
+        <translation>Только избранные</translation>
+    </message>
+    <message>
+        <source>v5 · ★ favorites · ↻ recheck 30 pings. Latest check first, earlier results dated below. Sorted by loss, P95, median and variation. App split tunneling must be off; Google must use VPN.</source>
+        <translation>v5 · ★ избранное · ↻ 30 запросов. Новая проверка сверху, прежние замеры с датой ниже. Порядок: потери, P95, медиана, разброс. Выключите раздельное туннелирование приложений; Google должен идти через VPN.</translation>
+    </message>
+    <message>
+        <source>Remove from favorites</source>
+        <translation>Убрать из избранного</translation>
+    </message>
+    <message>
+        <source>Add to favorites</source>
+        <translation>В избранное</translation>
+    </message>
+    <message>
+        <source>Recheck this location with 30 pings</source>
+        <translation>Проверить эту страну: 30 запросов</translation>
+    </message>
+    <message>
+        <source>v5 · Star: favorites. Arrows: recheck 30 pings. Latest check first, earlier results dated below. Sorted by loss, P95, median and variation. App split tunneling must be off; Google must use VPN.</source>
+        <translation>v5 · Звезда — избранное, стрелки — повторные 30 запросов. Новая проверка сверху, прежние замеры с датой ниже. Порядок: потери, P95, медиана, разброс. Выключите раздельное туннелирование приложений; Google должен идти через VPN.</translation>
+    </message>
 </context>
 <context>
     <name>PageSettingsApiDevices</name>
@@ -7507,6 +7579,22 @@ Remove the server from the app to continue.</source>
     <message>
         <source>Current location measured: 30 requests. Detailed results are shown first.</source>
         <translation>Текущая страна проверена: 30 запросов. Подробные результаты показаны сверху.</translation>
+    </message>
+    <message>
+        <source>Checked %1/%2. Restoring the original connection...</source>
+        <translation>Проверено %1/%2. Возвращаем исходное подключение…</translation>
+    </message>
+    <message>
+        <source>Checked %1 of %2 locations</source>
+        <translation>Проверено %1 из %2 стран</translation>
+    </message>
+    <message>
+        <source> · about %1 min remaining</source>
+        <translation> · осталось около %1 мин</translation>
+    </message>
+    <message>
+        <source> · about %1 sec remaining</source>
+        <translation> · осталось около %1 с</translation>
     </message>
 </context>
 </TS>

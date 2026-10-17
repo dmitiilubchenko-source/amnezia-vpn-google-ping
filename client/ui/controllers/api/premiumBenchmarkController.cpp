@@ -1,5 +1,19 @@
 #include "premiumBenchmarkController.h"
 #include <algorithm>
+#include <QDateTime>
+#include <QUuid>
+#include <cmath>
+
+namespace {
+const QStringList resultKeys{"countryCode", "state", "protocol", "measurementStage", "latencyMs", "medianMs", "p95Ms",
+    "jitterMs", "loss", "sent", "replies", "referenceAddress", "checkedAtUtc", "runId"};
+bool stale(const QVariantMap &row)
+{
+    const auto date = QDateTime::fromString(row.value("checkedAtUtc").toString(), Qt::ISODate);
+    const auto age = date.secsTo(QDateTime::currentDateTimeUtc());
+    return !date.isValid() || age < -300 || age > 24 * 60 * 60;
+}
+}
 
 PremiumBenchmarkController::PremiumBenchmarkController(BenchmarkBackend *backend, QObject *parent, ProbeFactory factory, int settleMsecs)
     : QObject(parent), m_backend(backend), m_factory(factory), m_settleMsecs(settleMsecs)
@@ -7,6 +21,9 @@ PremiumBenchmarkController::PremiumBenchmarkController(BenchmarkBackend *backend
     if (!m_factory) m_factory = [](QObject *parent) { return new GooglePingProbe(parent); };
     m_timeout.setSingleShot(true);
     connect(&m_timeout, &QTimer::timeout, this, &PremiumBenchmarkController::onTimeout);
+    m_progressTimer.setInterval(1000);
+    connect(&m_progressTimer, &QTimer::timeout, this, &PremiumBenchmarkController::progressChanged);
+    connect(this, &PremiumBenchmarkController::changed, this, &PremiumBenchmarkController::progressChanged);
     connect(backend, &BenchmarkBackend::changed, this, &PremiumBenchmarkController::onConnectionChanged, Qt::QueuedConnection);
     connect(backend, &BenchmarkBackend::loaded, this, &PremiumBenchmarkController::onLoaded, Qt::QueuedConnection);
     connect(backend, &BenchmarkBackend::referenceResolved, this, [this](quint64 requestId, const QHostAddress &address) {
@@ -20,8 +37,22 @@ PremiumBenchmarkController::PremiumBenchmarkController(BenchmarkBackend *backend
 QVariantList PremiumBenchmarkController::ranking() const
 {
     auto rows = m_rows;
+    for (auto &item : rows) {
+        auto row = item.toMap();
+        const auto code = row.value("countryCode").toString();
+        row["favorite"] = m_favorites.contains(code);
+        row["saved"] = m_restored.contains(code);
+        row["stale"] = !row.value("state").toString().isEmpty() && stale(row);
+        row["historical"] = !row.value("state").toString().isEmpty()
+            && (row.value("runId").toString() != m_latestRunId || row.value("stale").toBool());
+        item = row;
+    }
     std::stable_sort(rows.begin(), rows.end(), [](const QVariant &a, const QVariant &b) {
         const auto left = a.toMap(), right = b.toMap();
+        const auto group = [](const QVariantMap &row) {
+            return row.value("state").toString().isEmpty() ? 2 : row.value("historical").toBool() ? 1 : 0;
+        };
+        if (group(left) != group(right)) return group(left) < group(right);
         const bool lready = left.value("state") == "ready", rready = right.value("state") == "ready";
         if (lready != rready) return lready;
         if (!lready) return false;
@@ -38,6 +69,120 @@ QVariantList PremiumBenchmarkController::ranking() const
     return rows;
 }
 
+QVariantMap PremiumBenchmarkController::recommendation() const
+{
+    if (busy()) return {};
+    for (const auto &item : ranking()) {
+        const auto row = item.toMap();
+        if (row.value("state") == "ready" && row.value("measurementStage") == "detailed"
+            && row.value("runId").toString() == m_latestRunId && !row.value("stale").toBool()
+            && row.value("sent").toInt() >= 30 && row.value("replies").toInt() >= 3) return row;
+    }
+    return {};
+}
+
+double PremiumBenchmarkController::overallProgress() const
+{
+    if (!m_totalVisits) return 0;
+    const double partial = m_phase == Measuring ? double(m_probeSent) / probeSettings().count : 0;
+    return std::clamp((m_completedVisits + partial) / m_totalVisits, 0.0, 1.0);
+}
+
+int PremiumBenchmarkController::estimatedSecondsRemaining() const
+{
+    if (!busy() || m_restoring || m_stopping) return -1;
+    const double quick = m_connectionSeconds + 1.2, detailed = m_connectionSeconds + 31;
+    const double currentBudget = m_detailed ? detailed : quick;
+    const double elapsed = m_visitClock.isValid() ? m_visitClock.elapsed() / 1000.0 : 0;
+    if (elapsed > currentBudget + 5 && m_phase != Measuring) return -1;
+    double currentRemaining = std::max(1.0, currentBudget - elapsed);
+    if (m_phase == Measuring) currentRemaining = std::max(1, probeSettings().count - m_probeSent) * (m_detailed ? 1.0 : 0.2);
+    const int queued = std::max(0, int(m_order.size()) - m_cursor - 1);
+    return int(std::ceil(currentRemaining + queued * (m_detailed ? detailed : quick)
+        + (!m_detailed ? m_expectedDetailed * detailed : 0) + (!m_single ? m_connectionSeconds : 0)));
+}
+
+QString PremiumBenchmarkController::progressText() const
+{
+    if (!m_totalVisits) return {};
+    if (m_restoring && busy()) return tr("Checked %1/%2. Restoring the original connection...").arg(m_completedVisits).arg(m_totalVisits);
+    const auto base = tr("Checked %1 of %2 locations").arg(m_completedVisits).arg(m_totalVisits);
+    const int seconds = estimatedSecondsRemaining();
+    if (seconds < 0) return base;
+    return base + (seconds >= 60 ? tr(" · about %1 min remaining").arg((seconds + 59) / 60)
+                                : tr(" · about %1 sec remaining").arg(((seconds + 9) / 10) * 10));
+}
+
+void PremiumBenchmarkController::loadSaved()
+{
+    m_favorites.clear(); m_restored.clear(); m_latestRunId.clear();
+    const auto saved = m_backend->preferences(m_serverId);
+    if (saved.value("version").toInt() != 1) return;
+    m_latestRunId = saved.value("lastRunId").toString();
+    const auto favorites = saved.value("favorites").toStringList();
+    for (auto &item : m_rows) {
+        auto row = item.toMap();
+        const auto code = row.value("countryCode").toString();
+        if (favorites.contains(code)) m_favorites.insert(code);
+        for (const auto &stored : saved.value("rows").toList()) {
+            const auto previous = stored.toMap();
+            if (previous.value("countryCode").toString() != code || previous.value("runId").toString().isEmpty()
+                || !QDateTime::fromString(previous.value("checkedAtUtc").toString(), Qt::ISODate).isValid()) continue;
+            if (previous.value("state") == "ready") {
+                const int sent = previous.value("sent").toInt(), replies = previous.value("replies").toInt();
+                if (sent < 1 || sent > 100 || replies < 1 || replies > sent) continue;
+                bool valid = true;
+                for (const auto *key : {"medianMs", "p95Ms", "loss"}) {
+                    const double value = previous.value(key, -1).toDouble();
+                    if (!std::isfinite(value) || value < 0) valid = false;
+                }
+                if (!valid || previous.value("loss").toDouble() > 100) continue;
+            }
+            for (const auto &key : resultKeys) if (previous.contains(key)) row[key] = previous.value(key);
+            m_restored.insert(code);
+            break;
+        }
+        item = row;
+    }
+}
+
+void PremiumBenchmarkController::save()
+{
+    if (m_serverId.isEmpty()) return;
+    QVariantList rows;
+    for (const auto &item : m_rows) {
+        const auto row = item.toMap();
+        if (row.value("state").toString().isEmpty()) continue;
+        QVariantMap result;
+        for (const auto &key : resultKeys) if (row.contains(key)) result[key] = row.value(key);
+        rows.append(result);
+    }
+    QStringList favorites(m_favorites.begin(), m_favorites.end());
+    favorites.sort();
+    m_backend->savePreferences(m_serverId, {{"version", 1}, {"favorites", favorites}, {"rows", rows}, {"lastRunId", m_latestRunId}});
+}
+
+void PremiumBenchmarkController::mergeCountries()
+{
+    QVariantList updated;
+    QSet<QString> available;
+    for (const auto &item : m_backend->countries(m_serverId)) {
+        auto row = item.toMap();
+        const auto code = row.value("countryCode").toString();
+        available.insert(code);
+        for (const auto &previous : m_rows) {
+            if (previous.toMap().value("countryCode").toString() != code) continue;
+            auto merged = previous.toMap();
+            for (auto it = row.begin(); it != row.end(); ++it) merged[it.key()] = it.value();
+            row = merged; break;
+        }
+        updated.append(row);
+    }
+    m_rows = updated;
+    m_favorites.intersect(available);
+    m_restored.intersect(available);
+}
+
 PremiumBenchmarkController::~PremiumBenchmarkController()
 {
     if (m_cancelled) m_cancelled->store(true);
@@ -50,50 +195,61 @@ void PremiumBenchmarkController::refresh(const QString &serverId)
         if (busy()) finish(tr("Test stopped: selected subscription changed"));
         m_serverId = serverId;
         m_rows = m_backend->countries(serverId);
+        loadSaved();
         m_reference = {};
         m_status.clear();
+        m_completedVisits = m_totalVisits = 0;
     } else if (!busy()) {
-        const auto countries = m_backend->countries(serverId);
-        QVariantList updated;
-        for (const auto &item : countries) {
-            auto row = item.toMap();
-            for (const auto &previous : m_rows) {
-                if (previous.toMap().value("countryCode") == row.value("countryCode")) {
-                    auto merged = previous.toMap();
-                    for (auto it = row.begin(); it != row.end(); ++it) merged[it.key()] = it.value();
-                    row = merged;
-                    break;
-                }
-            }
-            updated.append(row);
-        }
-        m_rows = updated;
+        mergeCountries();
     }
     emit changed();
 }
 
-void PremiumBenchmarkController::startAll() { begin(false); }
-void PremiumBenchmarkController::checkCurrent() { if (canMeasure()) begin(true); }
+void PremiumBenchmarkController::startAll() { begin(AllCountries); }
+void PremiumBenchmarkController::checkCurrent() { if (canMeasure()) begin(CurrentCountry); }
+void PremiumBenchmarkController::startFavorites() { if (!m_favorites.isEmpty()) begin(FavoriteCountries); }
+void PremiumBenchmarkController::checkCountry(const QString &code)
+{
+    if (canMeasure() && code == currentCountry()) checkCurrent(); else begin(OneCountry, code);
+}
 
-void PremiumBenchmarkController::begin(bool single)
+void PremiumBenchmarkController::toggleFavorite(const QString &code)
+{
+    if (busy()) return;
+    bool available = false;
+    for (const auto &item : m_rows) if (item.toMap().value("countryCode").toString() == code) available = true;
+    if (!available) return;
+    if (m_favorites.contains(code)) m_favorites.remove(code); else m_favorites.insert(code);
+    save();
+    emit changed();
+}
+
+void PremiumBenchmarkController::begin(Mode mode, const QString &countryCode)
 {
     if (!canStart()) return;
-    m_single = single;
-    m_detailed = single;
+    mergeCountries();
+    m_single = mode == CurrentCountry;
+    m_detailed = mode != AllCountries;
     m_originalCountry = currentCountry();
     m_originalProtocol = m_backend->protocol(m_serverId);
     m_originalConnected = m_backend->state() == BenchmarkBackend::Connected;
     m_restoring = m_stopping = false;
     m_cursor = 0;
     m_order.clear();
-    if (!single) m_rows = m_backend->countries(m_serverId);
     for (const auto &item : m_rows) {
         const auto code = item.toMap().value("countryCode").toString();
-        if (!code.isEmpty() && !m_order.contains(code) && (!single || code == m_originalCountry)) m_order.append(code);
+        const bool selected = mode == AllCountries || (mode == CurrentCountry && code == m_originalCountry)
+            || (mode == OneCountry && code == countryCode) || (mode == FavoriteCountries && m_favorites.contains(code));
+        if (!code.isEmpty() && !m_order.contains(code) && selected) m_order.append(code);
     }
     if (m_order.isEmpty() || m_originalCountry.isEmpty()) return;
+    m_runId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    m_completedVisits = m_probeSent = 0;
+    m_expectedDetailed = m_detailed ? 0 : std::min(5, int(m_order.size()));
+    m_totalVisits = int(m_order.size()) + m_expectedDetailed;
+    m_visitClock.restart();
+    m_progressTimer.start();
     m_cancelled = std::make_shared<std::atomic_bool>(false);
-    if (single && !m_reference.isNull()) { settle(); return; }
     setPhase(Resolving, 5000, tr("Resolving one Google address for the entire test..."));
     m_backend->resolveReference(++m_requestId, m_cancelled);
 }
@@ -132,6 +288,8 @@ void PremiumBenchmarkController::setPhase(Phase phase, int timeoutMsecs, const Q
 
 void PremiumBenchmarkController::prepareTarget()
 {
+    m_visitClock.restart();
+    m_probeSent = 0;
     if (m_backend->state() == BenchmarkBackend::Disconnected || m_backend->state() == BenchmarkBackend::Error) {
         loadTarget();
     } else {
@@ -214,12 +372,17 @@ void PremiumBenchmarkController::measure()
         finish(tr("Test stopped: active location does not match the measurement")); return;
     }
     const auto settings = probeSettings();
+    if (m_visitClock.isValid() && !m_single) {
+        const double overhead = m_visitClock.elapsed() / 1000.0;
+        m_connectionSeconds = std::clamp(0.5 * m_connectionSeconds + 0.5 * overhead, 1.0, 60.0);
+    }
     setPhase(Measuring, settings.count * std::max(settings.intervalMs, settings.timeoutMs) + 5000,
         m_detailed ? tr("Detailed check: %1 · 0/30 requests").arg(targetName()) : tr("Quick check: %1 · 0/5 requests").arg(targetName()));
     auto *probe = m_factory(this);
     m_probe = probe;
     connect(probe, &BenchmarkProbe::progress, this, [this, probe](int sent, int total) {
         if (m_phase != Measuring || m_probe != probe) return;
+        m_probeSent = sent;
         m_status = (m_detailed ? tr("Detailed check: %1 · %2/%3 requests") : tr("Quick check: %1 · %2/%3 requests"))
             .arg(targetName()).arg(sent).arg(total);
         emit changed();
@@ -243,17 +406,25 @@ void PremiumBenchmarkController::record(const QVariantMap &result)
     for (auto &item : m_rows) {
         auto row = item.toMap();
         if (row.value("countryCode").toString() != target()) continue;
+        row = {{"countryCode", target()}, {"countryName", row.value("countryName")}, {"countryImageCode", row.value("countryImageCode")}};
         for (auto it = result.begin(); it != result.end(); ++it) row[it.key()] = it.value();
         row["protocol"] = m_backend->protocol(m_serverId);
         row["measurementStage"] = m_detailed ? "detailed" : "quick";
+        row["checkedAtUtc"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+        row["runId"] = m_runId;
+        m_latestRunId = m_runId;
+        m_restored.remove(target());
         item = row;
         break;
     }
+    save();
     emit changed();
 }
 
 void PremiumBenchmarkController::advance()
 {
+    ++m_completedVisits;
+    m_probeSent = 0;
     if (m_single) { finish(tr("Current location measured: 30 requests. Detailed results are shown first.")); return; }
     ++m_cursor;
     if (m_stopping) { restore(); return; }
@@ -268,10 +439,11 @@ bool PremiumBenchmarkController::beginDetailedPass()
     QStringList candidates;
     for (const auto &item : ranking()) {
         const auto row = item.toMap();
-        if (row.value("state") != "ready") continue;
+        if (row.value("state") != "ready" || row.value("runId").toString() != m_runId) continue;
         candidates.append(row.value("countryCode").toString());
         if (candidates.size() == 5) break;
     }
+    m_totalVisits = m_completedVisits + int(candidates.size());
     if (candidates.isEmpty()) return false;
     m_detailed = true;
     m_order = candidates;
@@ -305,6 +477,7 @@ void PremiumBenchmarkController::finish(const QString &message)
 {
     if (m_cancelled) m_cancelled->store(true);
     m_timeout.stop();
+    m_progressTimer.stop();
     delete m_probe; m_probe = nullptr;
     m_phase = Idle;
     m_status = message;

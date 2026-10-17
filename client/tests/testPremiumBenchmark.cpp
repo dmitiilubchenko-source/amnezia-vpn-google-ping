@@ -1,5 +1,8 @@
 #include <QTest>
 #include <QTimer>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QDateTime>
 #include "ui/controllers/api/premiumBenchmarkController.h"
 #include "ui/controllers/api/pingStatistics.h"
 
@@ -8,10 +11,15 @@ public:
     State connection = Connected;
     QString selected = "a", proto = "awg", failConnection;
     bool allowed = true, delayLoad = false;
-    QStringList loads, preferences;
+    QStringList loads, protocolPreferences;
     QStringList codes{"a", "b", "c"};
     int connects = 0, disconnects = 0;
     std::function<void()> pending;
+    QMap<QString, QVariantMap> saved;
+    QVariantMap preferences(const QString &id) const override { return saved.value(id); }
+    void savePreferences(const QString &id, const QVariantMap &value) override {
+        saved[id] = QJsonDocument::fromVariant(value).object().toVariantMap();
+    }
     bool eligible(const QString &id) const override { return allowed && id == "premium"; }
     State state() const override { return connection; }
     QVariantList countries(const QString &) const override {
@@ -27,7 +35,7 @@ public:
         });
     }
     void load(const QString &, const QString &code, const QString &preferred, quint64 requestId, std::shared_ptr<std::atomic_bool> cancelled) override {
-        loads.append(code); preferences.append(preferred);
+        loads.append(code); protocolPreferences.append(preferred);
         auto complete = [this, code, preferred, cancelled, requestId]() {
             if (!cancelled->load()) { selected = code; if (!preferred.isEmpty()) proto = preferred; }
             emit loaded(requestId, !cancelled->load(), false);
@@ -85,7 +93,7 @@ private slots:
         QCOMPARE(backend.loads, QStringList({"a", "b", "c", "c", "a", "a"}));
         QCOMPARE(backend.selected, QString("a"));
         QCOMPARE(backend.connection, BenchmarkBackend::Connected);
-        QCOMPARE(backend.preferences.last(), QString("awg"));
+        QCOMPARE(backend.protocolPreferences.last(), QString("awg"));
         const auto rows = controller.ranking();
         QCOMPARE(rows[0].toMap().value("countryCode").toString(), QString("c"));
         QCOMPARE(rows[1].toMap().value("countryCode").toString(), QString("a"));
@@ -264,6 +272,94 @@ private slots:
         QCOMPARE(backend.selected, QString("a"));
         QCOMPARE(backend.connection, BenchmarkBackend::Connected);
         for (const auto &item : controller.ranking()) QCOMPARE(item.toMap().value("state").toString(), QString("timeout"));
+    }
+    void favoritesAndResultsSurviveRestartWithoutRawNetworkData() {
+        FakeBackend backend;
+        {
+            PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+            controller.refresh("premium"); controller.toggleFavorite("c"); controller.startAll();
+            QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 2000);
+            QCOMPARE(controller.recommendation().value("countryCode").toString(), QString("c"));
+        }
+        const auto encoded = QJsonDocument::fromVariant(backend.saved.value("premium")).toJson();
+        QVERIFY(!encoded.contains("observationsMs"));
+        QVERIFY(!encoded.contains("sourceAddress"));
+        PremiumBenchmarkController reopened(&backend, nullptr, factory(backend), 0);
+        reopened.refresh("premium");
+        QCOMPARE(reopened.favoriteCount(), 1);
+        QCOMPARE(reopened.ranking()[0].toMap().value("medianMs").toInt(), 10);
+        QVERIFY(reopened.ranking()[0].toMap().value("saved").toBool());
+        QVERIFY(!reopened.recommendation().isEmpty());
+        reopened.refresh("other");
+        QCOMPARE(reopened.favoriteCount(), 0);
+        QVERIFY(reopened.recommendation().isEmpty());
+        reopened.refresh("premium"); QCOMPARE(reopened.favoriteCount(), 1);
+    }
+    void favoriteScanOnlyTestsSelectedCountriesInDetail() {
+        FakeBackend backend;
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+        controller.refresh("premium"); controller.toggleFavorite("c"); controller.startFavorites();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
+        QCOMPARE(trace.size(), 1);
+        QCOMPARE(trace[0].toMap().value("country").toString(), QString("c"));
+        QCOMPARE(trace[0].toMap().value("count").toInt(), 30);
+        QCOMPARE(backend.loads, QStringList({"c", "a"}));
+        QCOMPARE(backend.connection, BenchmarkBackend::Connected);
+        QCOMPARE(controller.overallProgress(), 1.0);
+    }
+    void oneCountryCheckPreservesOtherHistoryAndRestoresConnection() {
+        FakeBackend backend;
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+        controller.refresh("premium"); controller.startAll();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
+        trace.clear(); backend.loads.clear();
+        controller.checkCountry("a");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
+        QCOMPARE(trace.size(), 1);
+        QCOMPARE(controller.recommendation().value("countryCode").toString(), QString("a"));
+        auto previous = controller.ranking()[1].toMap();
+        QCOMPARE(previous.value("countryCode").toString(), QString("c"));
+        QVERIFY(previous.value("historical").toBool());
+        QCOMPARE(previous.value("medianMs").toInt(), 10);
+        QCOMPARE(backend.selected, QString("a"));
+    }
+    void staleSavedResultsAreLabeledAndNeverRecommended() {
+        FakeBackend backend;
+        {
+            PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+            controller.refresh("premium"); controller.checkCurrent();
+            QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
+        }
+        auto stored = backend.saved["premium"];
+        auto rows = stored.value("rows").toList();
+        auto row = rows[0].toMap();
+        row["checkedAtUtc"] = QDateTime::currentDateTimeUtc().addDays(-2).toString(Qt::ISODateWithMs);
+        rows[0] = row; stored["rows"] = rows; backend.saved["premium"] = stored;
+        PremiumBenchmarkController reopened(&backend, nullptr, factory(backend), 0);
+        reopened.refresh("premium");
+        QVERIFY(reopened.recommendation().isEmpty());
+        QVERIFY(reopened.ranking()[0].toMap().value("stale").toBool());
+    }
+    void invalidSelectionsAndEmptyFavoritesDoNotChangeVpn() {
+        FakeBackend backend;
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+        controller.refresh("premium"); controller.startFavorites(); controller.checkCountry("unknown"); controller.toggleFavorite("unknown");
+        QVERIFY(!controller.busy()); QVERIFY(backend.loads.isEmpty());
+        QCOMPARE(controller.favoriteCount(), 0);
+    }
+    void progressAndFavoritesAreProtectedDuringActiveCheck() {
+        FakeBackend backend; holdDetailed = true;
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+        controller.refresh("premium"); controller.toggleFavorite("c"); controller.startFavorites();
+        QTRY_VERIFY_WITH_TIMEOUT(trace.size() == 1, 1000);
+        controller.toggleFavorite("a");
+        QCOMPARE(controller.favoriteCount(), 1);
+        QVERIFY(!controller.progressText().isEmpty());
+        QVERIFY(controller.recommendation().isEmpty());
+        QVERIFY(controller.overallProgress() >= 0 && controller.overallProgress() < 1);
+        controller.stop();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
+        QCOMPARE(backend.selected, QString("a"));
     }
 };
 QTEST_GUILESS_MAIN(TestPremiumBenchmark)

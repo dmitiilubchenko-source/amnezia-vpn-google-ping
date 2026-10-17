@@ -1,6 +1,8 @@
 #include "amneziaBenchmarkBackend.h"
 #include <QFutureWatcher>
 #include <QHostInfo>
+#include <QJsonDocument>
+#include "secureQSettings.h"
 #include "core/repositories/secureServersRepository.h"
 #include "core/repositories/secureAppSettingsRepository.h"
 #include "core/controllers/connectionController.h"
@@ -9,14 +11,37 @@
 #include "core/utils/api/apiUtils.h"
 
 AmneziaBenchmarkBackend::AmneziaBenchmarkBackend(SecureServersRepository *servers, SecureAppSettingsRepository *settings,
-    ConnectionController *connection, ConnectionUiController *ui, SubscriptionController *subscription, QObject *parent)
-    : BenchmarkBackend(parent), m_servers(servers), m_settings(settings), m_connection(connection), m_ui(ui), m_subscription(subscription)
+    ConnectionController *connection, ConnectionUiController *ui, SubscriptionController *subscription, SecureQSettings *storage, QObject *parent)
+    : BenchmarkBackend(parent), m_servers(servers), m_settings(settings), m_connection(connection), m_ui(ui), m_subscription(subscription), m_storage(storage)
 {
     connect(ui, &ConnectionUiController::connectionStateChanged, this, &BenchmarkBackend::changed);
     connect(servers, &SecureServersRepository::serverEdited, this, &BenchmarkBackend::changed);
     connect(servers, &SecureServersRepository::serverRemoved, this, &BenchmarkBackend::changed);
     connect(servers, &SecureServersRepository::defaultServerChanged, this, &BenchmarkBackend::changed);
     connect(settings, &SecureAppSettingsRepository::appsSplitTunnelingEnabledChanged, this, &BenchmarkBackend::changed);
+    connect(servers, &SecureServersRepository::serverRemoved, this, [this](const QString &id) {
+        auto all = QJsonDocument::fromJson(m_storage->value("Conf/premiumBenchmarkV5").toByteArray()).object();
+        all.remove(id);
+        m_storage->setValue("Conf/premiumBenchmarkV5", QJsonDocument(all).toJson(QJsonDocument::Compact));
+    });
+    auto all = QJsonDocument::fromJson(m_storage->value("Conf/premiumBenchmarkV5").toByteArray()).object();
+    const auto ids = servers->orderedServerIds();
+    bool pruned = false;
+    for (const auto &id : all.keys()) if (!ids.contains(id)) { all.remove(id); pruned = true; }
+    if (pruned) m_storage->setValue("Conf/premiumBenchmarkV5", QJsonDocument(all).toJson(QJsonDocument::Compact));
+}
+
+QVariantMap AmneziaBenchmarkBackend::preferences(const QString &id) const
+{
+    return QJsonDocument::fromJson(m_storage->value("Conf/premiumBenchmarkV5").toByteArray()).object().value(id).toObject().toVariantMap();
+}
+
+void AmneziaBenchmarkBackend::savePreferences(const QString &id, const QVariantMap &preferences)
+{
+    if (!m_servers->orderedServerIds().contains(id)) return;
+    auto all = QJsonDocument::fromJson(m_storage->value("Conf/premiumBenchmarkV5").toByteArray()).object();
+    all[id] = QJsonObject::fromVariantMap(preferences);
+    m_storage->setValue("Conf/premiumBenchmarkV5", QJsonDocument(all).toJson(QJsonDocument::Compact));
 }
 
 bool AmneziaBenchmarkBackend::eligible(const QString &id) const

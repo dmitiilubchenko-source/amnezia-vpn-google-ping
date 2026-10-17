@@ -12,6 +12,7 @@
 #include "ui/controllers/api/tunnelLatencyProbe.h"
 #include "core/repositories/secureAppSettingsRepository.h"
 #include "ui/controllers/connectionUiController.h"
+#include "ui/controllers/api/amneziaBenchmarkBackend.h"
 
 class TestPremiumLatency : public QObject
 {
@@ -28,6 +29,41 @@ class TestPremiumLatency : public QObject
     }
 
 private slots:
+    void freshProfileHasNoBundledSubscription()
+    {
+        SecureQSettings settings("AmneziaVPN-Test", QUuid::createUuid().toString(), nullptr, false);
+        SecureServersRepository servers(&settings);
+        SecureAppSettingsRepository appSettings(&settings);
+        ConnectionUiController ui(nullptr, nullptr);
+        AmneziaBenchmarkBackend backend(&servers, &appSettings, nullptr, &ui, nullptr, &settings, nullptr);
+        PremiumBenchmarkController controller(&backend);
+        QVERIFY(servers.orderedServerIds().isEmpty());
+        QVERIFY(servers.defaultServerId().isEmpty());
+        controller.refresh(servers.defaultServerId());
+        QVERIFY(!controller.canStart());
+        controller.startAll();
+        QVERIFY(!controller.busy());
+        QVERIFY(controller.ranking().isEmpty());
+        settings.clearSettings();
+    }
+
+    void savedBenchmarkDataIsRemovedWithItsSubscription()
+    {
+        SecureQSettings settings("AmneziaVPN-Test", QUuid::createUuid().toString(), nullptr, false);
+        SecureServersRepository servers(&settings);
+        SecureAppSettingsRepository appSettings(&settings);
+        ConnectionUiController ui(nullptr, nullptr);
+        AmneziaBenchmarkBackend backend(&servers, &appSettings, nullptr, &ui, nullptr, &settings, nullptr);
+        const auto id = servers.addServer({}, config("127.0.0.1").toJson(), serverConfigUtils::ConfigType::AmneziaPremiumV2);
+        backend.savePreferences(id, {{"version", 1}, {"favorites", QStringList{"de"}}});
+        QCOMPARE(backend.preferences(id).value("favorites").toStringList(), QStringList{"de"});
+        servers.removeServer(id);
+        QVERIFY(backend.preferences(id).isEmpty());
+        backend.savePreferences(id, {{"version", 1}});
+        QVERIFY(backend.preferences(id).isEmpty());
+        settings.clearSettings();
+    }
+
     void loopback_data()
     {
         QTest::addColumn<QString>("host");

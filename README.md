@@ -1,6 +1,6 @@
 # Amnezia VPN
 
-> **Unofficial fork: Google Ping & Rank v4 for Windows / Premium.** Based on AmneziaVPN 5.0.3.0; not endorsed or signed by Amnezia. [Download the experimental Windows build](https://github.com/dmitiilubchenko-source/amnezia-vpn-google-ping/releases) · [Changes and license](FORK-NOTICE.md) · [Build from source](BUILD-GOOGLE-PING.md) · [Инструкция по-русски](PREMIUM-PING.md). Original project documentation follows.
+> **Unofficial fork: Google Ping & Rank v5 for Windows / Premium.** Based on AmneziaVPN 5.0.3.0; not endorsed or signed by Amnezia. Requires your own Premium subscription; no personal VPN key is bundled. [Download the experimental Windows build](https://github.com/dmitiilubchenko-source/amnezia-vpn-google-ping/releases) · [Changes and license](FORK-NOTICE.md) · [Build from source](BUILD-GOOGLE-PING.md) · [Инструкция по-русски](PREMIUM-PING.md). Original project documentation follows.
 
 ### _The best client for self-hosted VPN_
 
