@@ -1,3 +1,5 @@
+> **Неофициальный форк Google Ping & Rank v3 для Windows / Premium.** Основан на AmneziaVPN 5.0.3.0. Сборка не связана с разработчиками Amnezia и не подписана ими. [Скачать сборку](https://github.com/dmitiilubchenko-source/amnezia-vpn-google-ping/releases) · [Инструкция](PREMIUM-PING.md) · [Изменения и лицензия](FORK-NOTICE.md) · [Сборка из исходников](BUILD-GOOGLE-PING.md). Ниже сохранена документация оригинального проекта.
+
 # Amnezia VPN
 
 ### _Лучший клиент для создания VPN на собственном сервере_

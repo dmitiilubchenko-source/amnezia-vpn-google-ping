@@ -11,6 +11,8 @@
 #include "logger.h"
 #include "secureQSettings.h"
 #include "core/utils/appUiConfig.h"
+#include "ui/controllers/api/premiumLatencyController.h"
+#include "ui/controllers/api/amneziaBenchmarkBackend.h"
 
 #if defined(Q_OS_ANDROID)
     #include "core/utils/installedAppsImageProvider.h"
@@ -234,6 +236,19 @@ void CoreController::initControllers()
                                                               m_apiCountryModel, m_apiDevicesModel, m_settingsController,
                                                               m_connectionController, this);
     setQmlContextProperty("SubscriptionUiController", m_subscriptionUiController);
+
+    auto *premiumLatencyController = new PremiumLatencyController(m_serversRepository, m_settings,
+                                                                  m_connectionUiController, this);
+    setQmlContextProperty("PremiumLatencyController", premiumLatencyController);
+    premiumLatencyController->setAppSettings(m_appSettingsRepository);
+    auto *benchmarkBackend = new AmneziaBenchmarkBackend(m_serversRepository, m_appSettingsRepository,
+        m_connectionController, m_connectionUiController, m_subscriptionController, this);
+    auto *benchmarkController = new PremiumBenchmarkController(benchmarkBackend, this);
+    setQmlContextProperty("BenchmarkController", benchmarkController);
+    connect(m_serversUiController, &ServersUiController::processedServerIdChanged, premiumLatencyController,
+            [this, premiumLatencyController]() {
+        premiumLatencyController->refresh(m_serversUiController->getProcessedServerId());
+    });
 
     m_apiNewsUiController = new ApiNewsUiController(m_newsModel, m_newsController, this);
     setQmlContextProperty("ApiNewsController", m_apiNewsUiController);

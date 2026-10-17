@@ -3482,6 +3482,66 @@ Create one from the current settings.</source>
 </context>
 <context>
     <name>PageSettingsApiAvailableCountries</name>
+    <message><source>HTTPS through VPN: %1</source><translation>HTTPS через VPN: %1</translation></message>
+    <message><source>HTTPS request timed out</source><translation>Нет ответа на HTTPS-запрос</translation></message>
+    <message><source>Could not verify the VPN route</source><translation>Не удалось подтвердить маршрут через VPN</translation></message>
+    <message><source>TLS verification failed</source><translation>Не удалось проверить сертификат TLS</translation></message>
+    <message><source>HTTPS test failed</source><translation>Ошибка HTTPS-проверки</translation></message>
+    <message><source>Connect to this location to measure its delay</source><translation>Подключитесь к локации, чтобы измерить задержку</translation></message>
+    <message><source>Measure connected location</source><translation>Измерить текущую локацию</translation></message>
+    <message><source>HTTPS reply time through VPN to Cloudflare (1.1.1.1). Connect to each location and measure. Results remain in the list during this session. App split tunneling must be off; the test checks the VPN route.</source><translation>Задержка HTTPS через VPN до Cloudflare (1.1.1.1). Подключайтесь к локациям и проверяйте их по очереди. Результаты остаются в списке до закрытия программы. Раздельное туннелирование приложений должно быть выключено; маршрут через VPN проверяется.</translation></message>
+    <message>
+        <source>&lt;1 ms</source>
+        <translation>&lt;1 мс</translation>
+    </message>
+    <message>
+        <source>%1 ms</source>
+        <translation>%1 мс</translation>
+    </message>
+    <message>
+        <source>ICMP: %1 (%2/3 replies)</source>
+        <translation>ICMP: %1 (ответов: %2/3)</translation>
+    </message>
+    <message>
+        <source>Checking ping...</source>
+        <translation>Проверка пинга…</translation>
+    </message>
+    <message>
+        <source>No ICMP reply</source>
+        <translation>Нет ответа на ICMP</translation>
+    </message>
+    <message>
+        <source>Could not resolve server address</source>
+        <translation>Не удалось определить адрес сервера</translation>
+    </message>
+    <message>
+        <source>Ping measurement failed</source>
+        <translation>Ошибка измерения пинга</translation>
+    </message>
+    <message>
+        <source>Ping not measured</source>
+        <translation>Пинг ещё не измерен</translation>
+    </message>
+    <message>
+        <source>Select this location first to learn its address</source>
+        <translation>Сначала выберите локацию, чтобы узнать её адрес</translation>
+    </message>
+    <message>
+        <source>Stop ping check</source>
+        <translation>Остановить проверку</translation>
+    </message>
+    <message>
+        <source>Check all known locations</source>
+        <translation>Проверить известные локации</translation>
+    </message>
+    <message>
+        <source>ICMP ping to the last known server, not a VPN speed test. Addresses are remembered for 24 hours after selecting a location. No reply does not mean the VPN is unavailable.</source>
+        <translation>ICMP-пинг до последнего известного сервера, а не тест скорости VPN. Адреса запоминаются на 24 часа после выбора локации. Отсутствие ответа не означает, что VPN недоступен.</translation>
+    </message>
+    <message>
+        <source>Disconnect the VPN before comparing location pings.</source>
+        <translation>Отключите VPN, чтобы сравнить пинги локаций.</translation>
+    </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiAvailableCountries.qml" line="147"/>
         <source>Subscription expired</source>
@@ -3511,6 +3571,58 @@ Create one from the current settings.</source>
         <location filename="../ui/qml/Pages2/PageSettingsApiAvailableCountries.qml" line="213"/>
         <source>Unable change server location while there is an active connection</source>
         <translation>Невозможно изменить локацию во время активного соединения</translation>
+    </message>
+    <message>
+        <source>Google: %1 · loss %2% · %3</source>
+        <translation>Google: %1 · потери %2% · %3</translation>
+    </message>
+    <message>
+        <source>No Google ping reply</source>
+        <translation>Google не ответил на ping</translation>
+    </message>
+    <message>
+        <source>VPN connection failed</source>
+        <translation>Не удалось подключить VPN</translation>
+    </message>
+    <message>
+        <source>Could not load this location</source>
+        <translation>Не удалось получить конфигурацию</translation>
+    </message>
+    <message>
+        <source>Not measured — use Check all locations</source>
+        <translation>Ещё не измерено</translation>
+    </message>
+    <message>
+        <source>Check all locations?</source>
+        <translation>Проверить все страны?</translation>
+    </message>
+    <message>
+        <source>The VPN will reconnect for each Premium location. Internet and this chat may briefly disconnect. Five Google pings are measured per location. The original location is restored at the end. You can stop the test.</source>
+        <translation>VPN будет по очереди подключаться к каждой стране Premium. Интернет и этот чат могут ненадолго отключаться. Для каждой страны выполняются 5 запросов ping к Google. В конце приложение попробует вернуть исходное подключение. Проверку можно остановить.</translation>
+    </message>
+    <message>
+        <source>Stop test</source>
+        <translation>Остановить проверку</translation>
+    </message>
+    <message>
+        <source>Check all locations · Google</source>
+        <translation>Проверить все · Google</translation>
+    </message>
+    <message>
+        <source>Measure current · Google</source>
+        <translation>Измерить текущую · Google</translation>
+    </message>
+    <message>
+        <source>Google Ping &amp; Rank v3. All locations are checked through the VPN and sorted by average ping. App split tunneling must be off. The test address must be routed through VPN.</source>
+        <translation>Google Ping &amp; Rank v3. Страны сортируются по среднему ping через VPN. Раздельное туннелирование приложений должно быть выключено. Адрес Google должен идти через VPN.</translation>
+    </message>
+    <message>
+        <source>Start test</source>
+        <translation>Начать проверку</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отмена</translation>
     </message>
 </context>
 <context>
@@ -7219,6 +7331,122 @@ Remove the server from the app to continue.</source>
         <location filename="../ui/qml/main2.qml" line="407"/>
         <source>Cannot remove server during active connection</source>
         <translation>Невозможно удалить сервер во время активного соединения</translation>
+    </message>
+</context>
+<context>
+    <name>PremiumBenchmarkController</name>
+
+    <message>
+        <source>Could not resolve google.com</source>
+        <translation>Не удалось определить адрес google.com</translation>
+    </message>
+    <message>
+        <source>Test stopped: selected subscription changed</source>
+        <translation>Проверка остановлена: выбрана другая подписка</translation>
+    </message>
+    <message>
+        <source>Resolving one Google address for the entire test...</source>
+        <translation>Определяем единый адрес Google для всех стран…</translation>
+    </message>
+    <message>
+        <source>Restoring the original location...</source>
+        <translation>Возвращаем исходную страну…</translation>
+    </message>
+    <message>
+        <source>Disconnecting before the next location...</source>
+        <translation>Отключаем VPN перед следующей страной…</translation>
+    </message>
+    <message>
+        <source>Restoring the original configuration...</source>
+        <translation>Возвращаем исходную конфигурацию…</translation>
+    </message>
+    <message>
+        <source>Loading location %1 of %2: %3</source>
+        <translation>Получаем конфигурацию %1 из %2: %3</translation>
+    </message>
+    <message>
+        <source>Could not restore the original location. Reconnect manually.</source>
+        <translation>Не удалось вернуть исходную страну. Подключитесь вручную.</translation>
+    </message>
+    <message>
+        <source>Test stopped: complete the Premium captcha and reconnect the original location manually.</source>
+        <translation>Нужна капча Premium. Пройдите её и подключите исходную страну вручную.</translation>
+    </message>
+    <message>
+        <source>Test stopped: location changed unexpectedly</source>
+        <translation>Проверка остановлена: страна неожиданно изменилась</translation>
+    </message>
+    <message>
+        <source>Stopped. Original location restored.</source>
+        <translation>Проверка остановлена. Исходная страна восстановлена.</translation>
+    </message>
+    <message>
+        <source>Finished. Locations are sorted by average Google ping.</source>
+        <translation>Готово. Страны отсортированы по среднему ping к Google.</translation>
+    </message>
+    <message>
+        <source>Reconnecting the original location...</source>
+        <translation>Подключаем исходную страну…</translation>
+    </message>
+    <message>
+        <source>Connecting: %1</source>
+        <translation>Подключаем: %1</translation>
+    </message>
+    <message>
+        <source>Test stopped: subscription or split tunneling settings changed</source>
+        <translation>Проверка остановлена: изменена подписка или раздельное туннелирование</translation>
+    </message>
+    <message>
+        <source>Stopped. Original connection restored.</source>
+        <translation>Проверка остановлена. Исходное подключение восстановлено.</translation>
+    </message>
+    <message>
+        <source>Original location restored, but reconnection failed.</source>
+        <translation>Исходная страна восстановлена, но подключиться не удалось.</translation>
+    </message>
+    <message>
+        <source>Test stopped because the VPN connection changed</source>
+        <translation>Проверка остановлена: подключение VPN изменилось</translation>
+    </message>
+    <message>
+        <source>Waiting for the VPN route: %1</source>
+        <translation>Ждём готовности VPN: %1</translation>
+    </message>
+    <message>
+        <source>Test stopped: active location does not match the measurement</source>
+        <translation>Проверка остановлена: активная страна не совпадает с измеряемой</translation>
+    </message>
+    <message>
+        <source>Pinging Google: %1 (%2/%3)</source>
+        <translation>Измеряем ping к Google: %1 (%2/%3)</translation>
+    </message>
+    <message>
+        <source>Test stopped: active location changed</source>
+        <translation>Проверка остановлена: активная страна изменилась</translation>
+    </message>
+    <message>
+        <source>Measured. Results are sorted by average Google ping.</source>
+        <translation>Измерено. Результаты отсортированы по среднему ping к Google.</translation>
+    </message>
+    <message>
+        <source>Stopped</source>
+        <translation>Проверка остановлена</translation>
+    </message>
+    <message>
+        <source>Stopping: waiting for the pending configuration request...</source>
+        <translation>Останавливаем: ждём завершения запроса конфигурации…</translation>
+    </message>
+    <message>
+        <source>Request timed out: waiting for it to finish before restoration...</source>
+        <translation>Запрос затянулся. Ждём его завершения, чтобы вернуть подключение…</translation>
+    </message>
+    <message>
+        <source>Test stopped: operation timed out. Check the current connection manually.</source>
+        <translation>Проверка остановлена по тайм-ауту. Проверьте подключение вручную.</translation>
+    </message>
+    <message>
+        <source>Original location could not reconnect. Reconnect manually.</source>
+        <translation>Не удалось подключить исходную страну. Подключитесь вручную.</translation>
     </message>
 </context>
 </TS>

@@ -17,6 +17,7 @@ void anchorOpenSSL() {
 
 #ifdef Q_OS_WIN
     #include "Windows.h"
+    #include <QMessageBox>
 #endif
 
 #if defined(Q_OS_IOS)
@@ -63,6 +64,11 @@ int main(int argc, char *argv[])
 
 #if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS) && !defined(MACOS_NE)
     if (isAnotherInstanceRunning()) {
+#ifdef Q_OS_WIN
+        QMessageBox::information(nullptr, "AmneziaVPN Google Ping & Rank",
+            QString::fromUtf8("Новая версия не запущена: другая AmneziaVPN уже работает. Завершите её через меню значка в трее (Выход / Quit), затем снова запустите эту сборку. Крестик может только скрыть окно.\n\nЗапускаемый файл:\n")
+            + QCoreApplication::applicationFilePath());
+#endif
         QTimer::singleShot(1000, &app, [&]() { app.quit(); });
         return app.exec();
     }

@@ -24,7 +24,8 @@ namespace {
 }
 
 SecureQSettings::SecureQSettings(const QString &organization, const QString &application, QObject *parent, bool enableEncryption)
-    : QObject { parent }, m_settings(organization, application, parent), encryptedKeys({ "Servers/serversList" }), m_encryptionEnabled(enableEncryption)
+    : QObject { parent }, m_settings(organization, application, parent),
+      encryptedKeys({ "Servers/serversList", "Conf/premiumLatencyTargets" }), m_encryptionEnabled(enableEncryption)
 {
     bool encrypted = m_settings.value("Conf/encrypted").toBool();
 

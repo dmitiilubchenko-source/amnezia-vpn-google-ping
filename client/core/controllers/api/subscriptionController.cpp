@@ -370,6 +370,53 @@ void SubscriptionController::markSubscriptionExpiredByServer(const QString &serv
                                     serverConfigUtils::configTypeFromJson(expiredApiV2.toJson()));
 }
 
+QFuture<ErrorCode> SubscriptionController::updateBenchmarkCountry(const QString &serverId, const QString &countryCode,
+                                                                 QObject *context, std::shared_ptr<std::atomic_bool> cancelled,
+                                                                 const QString &preferredProtocol)
+{
+    auto promise = QSharedPointer<QPromise<ErrorCode>>::create();
+    promise->start();
+    const auto config = m_serversRepository->apiV2Config(serverId);
+    if (!config || !config->isPremium()) {
+        promise->addResult(ErrorCode::InternalError);
+        promise->finish();
+        return promise->future();
+    }
+    QString protocol = preferredProtocol.isEmpty() ? config->serviceProtocol() : preferredProtocol;
+    for (const auto &country : config->apiConfig.availableCountries) {
+        const auto object = country.toObject();
+        if (object.value(apiDefs::key::serverCountryCode).toString() != countryCode) continue;
+        const auto protocols = object.value(apiDefs::key::availableProtocols).toArray();
+        if (!protocols.isEmpty() && !protocols.contains(protocol)) protocol = protocols.first().toString();
+        break;
+    }
+    const auto protocolData = generateProtocolData(protocol);
+    const auto payload = GatewayPayloadBuilder(m_appSettingsRepository)
+        .addField(apiDefs::key::userCountryCode, config->apiConfig.userCountryCode)
+        .addField(apiDefs::key::serverCountryCode, countryCode)
+        .addField(apiDefs::key::serviceType, config->serviceType())
+        .addField(apiDefs::key::serviceProtocol, protocol)
+        .addField(apiDefs::key::publicKey, publicKeyForProtocol(protocol, protocolData))
+        .addField(apiDefs::key::authData, config->authData.toJson()).build();
+    auto gateway = QSharedPointer<GatewayController>::create(m_appSettingsRepository->getGatewayEndpoint(config->apiConfig.isTestPurchase),
+        m_appSettingsRepository->isDevGatewayEnv(config->apiConfig.isTestPurchase), apiDefs::requestTimeoutMsecs,
+        m_appSettingsRepository->isStrictKillSwitchEnabled(), m_appSettingsRepository);
+    auto *watcher = new QFutureWatcher<QPair<ErrorCode, QByteArray>>(context);
+    QObject::connect(watcher, &QFutureWatcher<QPair<ErrorCode, QByteArray>>::finished, context,
+                     [this, watcher, promise, gateway, serverId, protocol, protocolData, cancelled]() {
+        const auto response = watcher->result();
+        watcher->deleteLater();
+        ErrorCode error = response.first;
+        if (error == ErrorCode::NoError && !cancelled->load()) {
+            error = applyUpdatedServiceConfig(serverId, protocol, protocolData, response.second);
+        }
+        promise->addResult(error);
+        promise->finish();
+    });
+    watcher->setFuture(gateway->postAsync(QString("%1v1/config"), payload));
+    return promise->future();
+}
+
 ErrorCode SubscriptionController::applyUpdatedServiceConfig(const QString &serverId, const QString &serviceProtocol,
                                                            const ProtocolData &protocolData, const QByteArray &responseBody)
 {

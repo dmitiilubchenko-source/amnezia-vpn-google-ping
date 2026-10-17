@@ -4,6 +4,8 @@
 #include <QJsonObject>
 #include <QByteArray>
 #include <QFuture>
+#include <atomic>
+#include <memory>
 
 #include "core/utils/errorCodes.h"
 #include "core/utils/routeModes.h"
@@ -53,6 +55,9 @@ public:
                                           const QString &captchaSolution, CaptchaInfo *retryCaptchaOut = nullptr);
 
     ErrorCode deactivateDevice(const QString &serverId);
+    QFuture<ErrorCode> updateBenchmarkCountry(const QString &serverId, const QString &countryCode,
+                                             QObject *context, std::shared_ptr<std::atomic_bool> cancelled,
+                                             const QString &preferredProtocol = {});
 
     ErrorCode deactivateExternalDevice(const QString &serverId, const QString &uuid, const QString &serverCountryCode);
 
