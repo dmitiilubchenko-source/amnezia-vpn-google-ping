@@ -25,8 +25,15 @@ QVariantList PremiumBenchmarkController::ranking() const
         const bool lready = left.value("state") == "ready", rready = right.value("state") == "ready";
         if (lready != rready) return lready;
         if (!lready) return false;
-        if (left.value("latencyMs") != right.value("latencyMs")) return left.value("latencyMs").toInt() < right.value("latencyMs").toInt();
-        return left.value("loss").toInt() < right.value("loss").toInt();
+        const bool ldetailed = left.value("measurementStage") == "detailed", rdetailed = right.value("measurementStage") == "detailed";
+        if (ldetailed != rdetailed) return ldetailed;
+        // Separate evidence levels, then compare loss and slow replies before typical RTT.
+        for (const auto *key : {"loss", "p95Ms", "medianMs", "jitterMs"}) {
+            const double l = left.value(key, left.value("latencyMs", -1)).toDouble();
+            const double r = right.value(key, right.value("latencyMs", -1)).toDouble();
+            if (l != r) return (l < 0 ? 1e12 : l) < (r < 0 ? 1e12 : r);
+        }
+        return false;
     });
     return rows;
 }
@@ -72,6 +79,7 @@ void PremiumBenchmarkController::begin(bool single)
 {
     if (!canStart()) return;
     m_single = single;
+    m_detailed = single;
     m_originalCountry = currentCountry();
     m_originalProtocol = m_backend->protocol(m_serverId);
     m_originalConnected = m_backend->state() == BenchmarkBackend::Connected;
@@ -93,6 +101,25 @@ void PremiumBenchmarkController::begin(bool single)
 QString PremiumBenchmarkController::target() const
 {
     return m_restoring ? m_originalCountry : m_order.value(m_cursor);
+}
+
+QString PremiumBenchmarkController::targetName() const
+{
+    for (const auto &item : m_rows) {
+        const auto row = item.toMap();
+        if (row.value("countryCode").toString() == target()) return row.value("countryName", target()).toString();
+    }
+    return target();
+}
+
+PingSettings PremiumBenchmarkController::probeSettings() const
+{
+    return m_detailed ? PingSettings{30, 1000, 1000} : PingSettings{5, 200, 1000};
+}
+
+QString PremiumBenchmarkController::completionMessage() const
+{
+    return tr("Finished. Detailed results first, then quick estimates; sorted by loss, P95 and median.");
 }
 
 void PremiumBenchmarkController::setPhase(Phase phase, int timeoutMsecs, const QString &message)
@@ -118,7 +145,14 @@ void PremiumBenchmarkController::loadTarget()
     m_cancelled = std::make_shared<std::atomic_bool>(false);
     setPhase(Loading, 60000, m_restoring ? tr("Restoring the original configuration...")
         : tr("Loading location %1 of %2: %3").arg(m_cursor + 1).arg(m_order.size()).arg(target()));
-    m_backend->load(m_serverId, target(), m_restoring ? m_originalProtocol : QString(), ++m_requestId, m_cancelled);
+    QString preferred = m_originalProtocol;
+    if (m_detailed && !m_restoring) {
+        for (const auto &item : m_rows) {
+            const auto row = item.toMap();
+            if (row.value("countryCode").toString() == target()) preferred = row.value("protocol", preferred).toString();
+        }
+    }
+    m_backend->load(m_serverId, target(), preferred, ++m_requestId, m_cancelled);
 }
 
 void PremiumBenchmarkController::onLoaded(quint64 requestId, bool success, bool captcha)
@@ -136,7 +170,7 @@ void PremiumBenchmarkController::onLoaded(quint64 requestId, bool success, bool 
         finish(tr("Test stopped: location changed unexpectedly")); return;
     }
     if (m_restoring && !m_originalConnected) {
-        finish(m_stopping ? tr("Stopped. Original location restored.") : tr("Finished. Locations are sorted by average Google ping."));
+        finish(m_stopping ? tr("Stopped. Original location restored.") : completionMessage());
         return;
     }
     setPhase(Connecting, 35000, m_restoring ? tr("Reconnecting the original location...")
@@ -155,40 +189,53 @@ void PremiumBenchmarkController::onConnectionChanged()
     const auto state = m_backend->state();
     if (m_phase == Disconnecting && (state == BenchmarkBackend::Disconnected || state == BenchmarkBackend::Error)) loadTarget();
     else if (m_phase == Connecting && state == BenchmarkBackend::Connected) {
-        if (m_restoring) finish(m_stopping ? tr("Stopped. Original connection restored.") : tr("Finished. Locations are sorted by average Google ping."));
+        if (m_restoring) finish(m_stopping ? tr("Stopped. Original connection restored.") : completionMessage());
         else settle();
     } else if (m_phase == Connecting && (state == BenchmarkBackend::Error || state == BenchmarkBackend::Disconnected)) {
         if (m_restoring) finish(tr("Original location restored, but reconnection failed."));
         else { record({{"state", "connectionError"}}); advance(); }
-    } else if ((m_phase == Measuring || m_phase == Settling) && state != BenchmarkBackend::Connected) {
+    } else if ((m_phase == Measuring || m_phase == Settling)
+               && (state != BenchmarkBackend::Connected || currentCountry() != target()
+                   || m_backend->protocol(m_serverId) != m_measureProtocol)) {
         finish(tr("Test stopped because the VPN connection changed"));
     }
 }
 
 void PremiumBenchmarkController::settle()
 {
-    setPhase(Settling, m_settleMsecs, tr("Waiting for the VPN route: %1").arg(target()));
+    m_measureProtocol = m_backend->protocol(m_serverId);
+    setPhase(Settling, m_settleMsecs, tr("Waiting for the VPN route: %1").arg(targetName()));
 }
 
 void PremiumBenchmarkController::measure()
 {
-    if (m_backend->state() != BenchmarkBackend::Connected || currentCountry() != target()) {
+    if (m_backend->state() != BenchmarkBackend::Connected || currentCountry() != target()
+        || m_backend->protocol(m_serverId) != m_measureProtocol) {
         finish(tr("Test stopped: active location does not match the measurement")); return;
     }
-    setPhase(Measuring, 10000, tr("Pinging Google: %1 (%2/%3)").arg(target()).arg(m_cursor + 1).arg(m_order.size()));
+    const auto settings = probeSettings();
+    setPhase(Measuring, settings.count * std::max(settings.intervalMs, settings.timeoutMs) + 5000,
+        m_detailed ? tr("Detailed check: %1 · 0/30 requests").arg(targetName()) : tr("Quick check: %1 · 0/5 requests").arg(targetName()));
     auto *probe = m_factory(this);
     m_probe = probe;
+    connect(probe, &BenchmarkProbe::progress, this, [this, probe](int sent, int total) {
+        if (m_phase != Measuring || m_probe != probe) return;
+        m_status = (m_detailed ? tr("Detailed check: %1 · %2/%3 requests") : tr("Quick check: %1 · %2/%3 requests"))
+            .arg(targetName()).arg(sent).arg(total);
+        emit changed();
+    });
     connect(probe, &BenchmarkProbe::finished, this, [this, probe](const QVariantMap &result) {
         if (m_phase != Measuring || m_probe != probe) return;
         m_probe = nullptr;
         probe->deleteLater();
-        if (m_backend->state() != BenchmarkBackend::Connected || currentCountry() != target()) {
+        if (m_backend->state() != BenchmarkBackend::Connected || currentCountry() != target()
+            || m_backend->protocol(m_serverId) != m_measureProtocol) {
             finish(tr("Test stopped: active location changed")); return;
         }
         record(result);
         advance();
     });
-    probe->start(m_reference);
+    probe->start(m_reference, settings);
 }
 
 void PremiumBenchmarkController::record(const QVariantMap &result)
@@ -198,6 +245,7 @@ void PremiumBenchmarkController::record(const QVariantMap &result)
         if (row.value("countryCode").toString() != target()) continue;
         for (auto it = result.begin(); it != result.end(); ++it) row[it.key()] = it.value();
         row["protocol"] = m_backend->protocol(m_serverId);
+        row["measurementStage"] = m_detailed ? "detailed" : "quick";
         item = row;
         break;
     }
@@ -206,9 +254,30 @@ void PremiumBenchmarkController::record(const QVariantMap &result)
 
 void PremiumBenchmarkController::advance()
 {
-    if (m_single) { finish(tr("Measured. Results are sorted by average Google ping.")); return; }
+    if (m_single) { finish(tr("Current location measured: 30 requests. Detailed results are shown first.")); return; }
     ++m_cursor;
-    if (m_stopping || m_cursor >= m_order.size()) restore(); else prepareTarget();
+    if (m_stopping) { restore(); return; }
+    if (m_cursor >= m_order.size()) {
+        if (!m_detailed && beginDetailedPass()) return;
+        restore();
+    } else prepareTarget();
+}
+
+bool PremiumBenchmarkController::beginDetailedPass()
+{
+    QStringList candidates;
+    for (const auto &item : ranking()) {
+        const auto row = item.toMap();
+        if (row.value("state") != "ready") continue;
+        candidates.append(row.value("countryCode").toString());
+        if (candidates.size() == 5) break;
+    }
+    if (candidates.isEmpty()) return false;
+    m_detailed = true;
+    m_order = candidates;
+    m_cursor = 0;
+    prepareTarget();
+    return true;
 }
 
 void PremiumBenchmarkController::restore()

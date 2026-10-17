@@ -23,11 +23,24 @@ PageType {
     property bool isSubscriptionRenewalAvailable: false
     property bool isInAppPurchase: false
 
+    function numberText(value) {
+        return Number(value).toFixed(1).replace(/\.0$/, "")
+    }
+
+    function timeText(value) {
+        if (value === undefined || value < 0) return "—"
+        return value === 0 ? qsTr("<1 ms") : qsTr("%1 ms").arg(numberText(value))
+    }
+
     function latencyText(measurement) {
         const state = measurement ? measurement.state : "unknown"
         if (state === "ready") {
-            const time = measurement.latencyMs === 0 ? qsTr("<1 ms") : qsTr("%1 ms").arg(measurement.latencyMs)
-            return qsTr("Google: %1 · loss %2% · %3").arg(time).arg(measurement.loss).arg(measurement.protocol || "")
+            const label = measurement.measurementStage === "detailed" ? qsTr("Detailed") : qsTr("Quick estimate")
+            return qsTr("Google: median %1 · P95 %2").arg(timeText(measurement.medianMs)).arg(timeText(measurement.p95Ms))
+                + "\n" + qsTr("Variation %1 · loss %2% (%3/%4)").arg(timeText(measurement.jitterMs))
+                    .arg(numberText(measurement.loss)).arg(measurement.replies).arg(measurement.sent)
+                + "\n" + qsTr("%1 · %2 requests · %3").arg(label).arg(measurement.sent).arg(measurement.protocol || "")
+                + (measurement.replies < 3 ? "\n" + qsTr("Few replies: low confidence") : "")
         }
         if (state === "checking") return qsTr("Checking ping...")
         if (state === "timeout") return qsTr("No Google ping reply")
@@ -103,7 +116,7 @@ PageType {
             }
             ParagraphTextType {
                 Layout.fillWidth: true
-                text: qsTr("The VPN will reconnect for each Premium location. Internet and this chat may briefly disconnect. Five Google pings are measured per location. The original location is restored at the end. You can stop the test.")
+                text: qsTr("Two stages: 5 Google pings per location, then 30 pings for the best 5. The VPN will reconnect; internet and this chat may disconnect. The test attempts to restore the original connection. You can stop it.")
             }
             BasicButtonType {
                 Layout.fillWidth: true
@@ -268,7 +281,7 @@ PageType {
                 Layout.rightMargin: 16
                 Layout.topMargin: 8
                 enabled: BenchmarkController.canMeasure
-                text: qsTr("Measure current · Google")
+                text: qsTr("Current location · 30 pings")
                 clickedFunc: function() { BenchmarkController.checkCurrent() }
             }
 
@@ -290,7 +303,7 @@ PageType {
                 Layout.topMargin: 8
                 Layout.bottomMargin: 12
                 color: AmneziaStyle.color.mutedGray
-                text: qsTr("Google Ping & Rank v3. All locations are checked through the VPN and sorted by average ping. App split tunneling must be off. The test address must be routed through VPN.")
+                text: qsTr("v4 · Detailed results first; then quick estimates. Sorted by loss, P95, median and variation. P95: 95% of replies were no slower. App split tunneling must be off; Google must use VPN.")
             }
         }
 

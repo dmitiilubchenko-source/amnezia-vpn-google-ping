@@ -3624,6 +3624,42 @@ Create one from the current settings.</source>
         <source>Cancel</source>
         <translation>Отмена</translation>
     </message>
+    <message>
+        <source>Detailed</source>
+        <translation>Подробно</translation>
+    </message>
+    <message>
+        <source>Quick estimate</source>
+        <translation>Быстрая оценка</translation>
+    </message>
+    <message>
+        <source>Google: median %1 · P95 %2</source>
+        <translation>Google: медиана %1 · P95 %2</translation>
+    </message>
+    <message>
+        <source>Variation %1 · loss %2% (%3/%4)</source>
+        <translation>Разброс %1 · потери %2% (%3/%4)</translation>
+    </message>
+    <message>
+        <source>%1 · %2 requests · %3</source>
+        <translation>%1 · %2 запросов · %3</translation>
+    </message>
+    <message>
+        <source>Few replies: low confidence</source>
+        <translation>Мало ответов: оценка ненадёжна</translation>
+    </message>
+    <message>
+        <source>Two stages: 5 Google pings per location, then 30 pings for the best 5. The VPN will reconnect; internet and this chat may disconnect. The test attempts to restore the original connection. You can stop it.</source>
+        <translation>Два этапа: по 5 запросов к Google для всех стран, затем по 30 для пяти лучших. VPN будет переподключаться, интернет и чат могут отключаться. В конце приложение попробует вернуть исходное подключение. Проверку можно остановить.</translation>
+    </message>
+    <message>
+        <source>Current location · 30 pings</source>
+        <translation>Текущая страна · 30 запросов</translation>
+    </message>
+    <message>
+        <source>v4 · Detailed results first; then quick estimates. Sorted by loss, P95, median and variation. P95: 95% of replies were no slower. App split tunneling must be off; Google must use VPN.</source>
+        <translation>v4 · Подробные результаты сверху, затем быстрые оценки. Порядок: потери, P95, медиана, разброс. P95: 95% ответов были не медленнее. Выключите раздельное туннелирование приложений; Google должен идти через VPN.</translation>
+    </message>
 </context>
 <context>
     <name>PageSettingsApiDevices</name>
@@ -7447,6 +7483,30 @@ Remove the server from the app to continue.</source>
     <message>
         <source>Original location could not reconnect. Reconnect manually.</source>
         <translation>Не удалось подключить исходную страну. Подключитесь вручную.</translation>
+    </message>
+    <message>
+        <source>Finished. Detailed results first, then quick estimates; sorted by loss, P95 and median.</source>
+        <translation>Готово. Подробные результаты сверху, затем быстрые оценки. Порядок: потери, P95, медиана.</translation>
+    </message>
+    <message>
+        <source>Detailed check: %1 · 0/30 requests</source>
+        <translation>Подробная проверка: %1 · 0/30 запросов</translation>
+    </message>
+    <message>
+        <source>Quick check: %1 · 0/5 requests</source>
+        <translation>Быстрая проверка: %1 · 0/5 запросов</translation>
+    </message>
+    <message>
+        <source>Detailed check: %1 · %2/%3 requests</source>
+        <translation>Подробная проверка: %1 · %2/%3 запросов</translation>
+    </message>
+    <message>
+        <source>Quick check: %1 · %2/%3 requests</source>
+        <translation>Быстрая проверка: %1 · %2/%3 запросов</translation>
+    </message>
+    <message>
+        <source>Current location measured: 30 requests. Detailed results are shown first.</source>
+        <translation>Текущая страна проверена: 30 запросов. Подробные результаты показаны сверху.</translation>
     </message>
 </context>
 </TS>

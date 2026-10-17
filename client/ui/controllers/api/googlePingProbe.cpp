@@ -1,13 +1,16 @@
 #include "googlePingProbe.h"
+#include "pingStatistics.h"
 #include <QFutureWatcher>
 #include <QElapsedTimer>
 #include <QNetworkInterface>
+#include <QPromise>
 #include <QtConcurrentRun>
 #include <QtEndian>
 #include <algorithm>
 #include <numeric>
 #include <thread>
 #include <vector>
+#include <functional>
 #ifdef Q_OS_WIN
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -17,10 +20,16 @@
 #endif
 
 namespace {
-QVariantMap measure(const QHostAddress &destination, const std::shared_ptr<std::atomic_bool> &cancelled)
+QVariantMap measure(const QHostAddress &destination, const std::shared_ptr<std::atomic_bool> &cancelled,
+                    const PingSettings &settings, const std::function<void(int)> &progress)
 {
-    QVariantMap result{{"state", "routeError"}, {"latencyMs", -1}, {"sent", 5}, {"replies", 0},
-                       {"loss", 100}, {"referenceAddress", destination.toString()}, {"method", "Google ICMP"}};
+    QVariantMap result{{"state", "routeError"}, {"latencyMs", -1}, {"sent", 0}, {"replies", 0},
+                       {"referenceAddress", destination.toString()}, {"method", "Google ICMP"}};
+    if (settings.count < 1 || settings.count > 100 || settings.intervalMs < 0 || settings.intervalMs > 5000
+        || settings.timeoutMs < 1 || settings.timeoutMs > 5000 || settings.warmupCount < 0 || settings.warmupCount > 3) {
+        result["state"] = "pingError";
+        return result;
+    }
 #ifdef Q_OS_WIN
     if (destination.protocol() != QAbstractSocket::IPv4Protocol) return result;
     QHostAddress source;
@@ -35,6 +44,12 @@ QVariantMap measure(const QHostAddress &destination, const std::shared_ptr<std::
         }
     }
     auto usesVpn = [&]() {
+        MIB_UNICASTIPADDRESS_ROW local = {};
+        InitializeUnicastIpAddressEntry(&local);
+        local.InterfaceIndex = index;
+        local.Address.Ipv4.sin_family = AF_INET;
+        local.Address.Ipv4.sin_addr.s_addr = qToBigEndian(source.toIPv4Address());
+        if (index <= 0 || source.isNull() || GetUnicastIpAddressEntry(&local) != NO_ERROR) return false;
         SOCKADDR_INET remote = {};
         remote.Ipv4.sin_family = AF_INET;
         remote.Ipv4.sin_addr.s_addr = qToBigEndian(destination.toIPv4Address());
@@ -50,34 +65,36 @@ QVariantMap measure(const QHostAddress &destination, const std::shared_ptr<std::
     if (handle == INVALID_HANDLE_VALUE) { result["state"] = "pingError"; return result; }
     char payload[32] = "Amnezia Google ping";
     std::vector<unsigned char> buffer(sizeof(ICMP_ECHO_REPLY) + sizeof(payload) + 128);
-    std::vector<int> samples;
+    QVector<int> observations;
     QVariantList elapsedSamples;
-    for (int i = 0; i < 5 && !cancelled->load(); ++i) {
+    const int total = settings.count + settings.warmupCount;
+    for (int i = 0; i < total && !cancelled->load(); ++i) {
         if (!usesVpn()) { IcmpCloseHandle(handle); return result; }
         std::fill(buffer.begin(), buffer.end(), 0);
         const auto address = qToBigEndian(destination.toIPv4Address());
         QElapsedTimer elapsed;
         elapsed.start();
         const DWORD count = IcmpSendEcho2Ex(handle, nullptr, nullptr, nullptr, qToBigEndian(source.toIPv4Address()),
-            address, payload, sizeof(payload), nullptr, buffer.data(), DWORD(buffer.size()), 1000);
+            address, payload, sizeof(payload), nullptr, buffer.data(), DWORD(buffer.size()), settings.timeoutMs);
         const auto *reply = reinterpret_cast<const ICMP_ECHO_REPLY *>(buffer.data());
-        if (count > 0 && reply->Status == IP_SUCCESS && reply->Address == address) {
-            samples.push_back(int(reply->RoundTripTime));
-            elapsedSamples.append(elapsed.elapsed());
+        if (i >= settings.warmupCount) {
+            if (count > 0 && reply->Status == IP_SUCCESS && reply->Address == address) {
+                observations.append(int(reply->RoundTripTime));
+                elapsedSamples.append(elapsed.elapsed());
+            } else observations.append(-1);
         }
         if (!usesVpn()) { IcmpCloseHandle(handle); return result; }
-        if (i < 4 && !cancelled->load()) std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        progress((std::max)(0, i + 1 - settings.warmupCount));
+        // Start-to-start spacing; time spent waiting for a reply is included.
+        while (i + 1 < total && !cancelled->load() && elapsed.elapsed() < settings.intervalMs) {
+            const auto remaining = settings.intervalMs - elapsed.elapsed();
+            std::this_thread::sleep_for(std::chrono::milliseconds(std::min<qint64>(remaining, 50)));
+        }
     }
     IcmpCloseHandle(handle);
     if (cancelled->load()) { result["state"] = "cancelled"; return result; }
-    result["replies"] = int(samples.size());
-    result["loss"] = (5 - int(samples.size())) * 20;
-    if (samples.empty()) { result["state"] = "timeout"; return result; }
-    std::sort(samples.begin(), samples.end());
-    result["state"] = "ready";
-    result["latencyMs"] = int((std::accumulate(samples.begin(), samples.end(), 0) + samples.size() / 2) / samples.size());
-    result["minMs"] = samples.front();
-    result["maxMs"] = samples.back();
+    const auto statistics = PingStatistics::summarize(observations);
+    for (auto it = statistics.begin(); it != statistics.end(); ++it) result[it.key()] = it.value();
     result["elapsedSamplesMs"] = elapsedSamples;
 #else
     Q_UNUSED(cancelled)
@@ -89,7 +106,7 @@ QVariantMap measure(const QHostAddress &destination, const std::shared_ptr<std::
 
 GooglePingProbe::GooglePingProbe(QObject *parent) : BenchmarkProbe(parent), m_cancelled(std::make_shared<std::atomic_bool>(false)) {}
 GooglePingProbe::~GooglePingProbe() { m_cancelled->store(true); }
-void GooglePingProbe::start(const QHostAddress &destination)
+void GooglePingProbe::start(const QHostAddress &destination, const PingSettings &settings)
 {
     auto *watcher = new QFutureWatcher<QVariantMap>(this);
     connect(watcher, &QFutureWatcher<QVariantMap>::finished, this, [this, watcher]() {
@@ -97,5 +114,12 @@ void GooglePingProbe::start(const QHostAddress &destination)
         watcher->deleteLater();
         emit finished(result);
     });
-    watcher->setFuture(QtConcurrent::run(measure, destination, m_cancelled));
+    connect(watcher, &QFutureWatcher<QVariantMap>::progressValueChanged, this, [this, settings](int sent) {
+        emit progress(sent, settings.count);
+    });
+    const auto cancelled = m_cancelled;
+    watcher->setFuture(QtConcurrent::run([destination, cancelled, settings](QPromise<QVariantMap> &promise) {
+        promise.setProgressRange(0, settings.count);
+        promise.addResult(measure(destination, cancelled, settings, [&promise](int sent) { promise.setProgressValue(sent); }));
+    }));
 }

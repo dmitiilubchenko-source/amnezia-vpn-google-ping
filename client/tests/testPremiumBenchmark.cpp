@@ -1,6 +1,7 @@
 #include <QTest>
 #include <QTimer>
 #include "ui/controllers/api/premiumBenchmarkController.h"
+#include "ui/controllers/api/pingStatistics.h"
 
 class FakeBackend final : public BenchmarkBackend {
 public:
@@ -8,14 +9,15 @@ public:
     QString selected = "a", proto = "awg", failConnection;
     bool allowed = true, delayLoad = false;
     QStringList loads, preferences;
+    QStringList codes{"a", "b", "c"};
     int connects = 0, disconnects = 0;
     std::function<void()> pending;
     bool eligible(const QString &id) const override { return allowed && id == "premium"; }
     State state() const override { return connection; }
     QVariantList countries(const QString &) const override {
-        return {QVariantMap{{"countryCode", "a"}, {"countryName", "A"}},
-                QVariantMap{{"countryCode", "b"}, {"countryName", "B"}},
-                QVariantMap{{"countryCode", "c"}, {"countryName", "C"}}};
+        QVariantList rows;
+        for (const auto &code : codes) rows.append(QVariantMap{{"countryCode", code}, {"countryName", code.toUpper()}});
+        return rows;
     }
     QString country(const QString &) const override { return selected; }
     QString protocol(const QString &) const override { return proto; }
@@ -39,13 +41,21 @@ public:
 
 class FakeProbe final : public BenchmarkProbe {
 public:
-    FakeProbe(QVariantMap result, QList<QHostAddress> *references, QObject *parent)
-        : BenchmarkProbe(parent), result(result), references(references) {}
-    QVariantMap result;
+    FakeProbe(QVector<int> pattern, QString code, QList<QHostAddress> *references, QVariantList *trace, bool holdDetailed, QObject *parent)
+        : BenchmarkProbe(parent), pattern(pattern), code(code), references(references), trace(trace), holdDetailed(holdDetailed) {}
+    QVector<int> pattern;
+    QString code;
     QList<QHostAddress> *references;
-    void start(const QHostAddress &address) override {
+    QVariantList *trace;
+    bool holdDetailed;
+    void start(const QHostAddress &address, const PingSettings &settings) override {
         references->append(address);
-        QTimer::singleShot(0, this, [this]() { emit finished(result); });
+        trace->append(QVariantMap{{"country", code}, {"count", settings.count}, {"interval", settings.intervalMs}});
+        if (holdDetailed && settings.count == 30) return;
+        QVector<int> observations;
+        for (int i = 0; i < settings.count; ++i) observations.append(pattern[i % pattern.size()]);
+        const auto result = PingStatistics::summarize(observations);
+        QTimer::singleShot(0, this, [this, result]() { emit finished(result); });
     }
 };
 
@@ -53,15 +63,18 @@ class TestPremiumBenchmark : public QObject {
     Q_OBJECT
 private:
     QList<QHostAddress> references;
+    QVariantList trace;
+    QMap<QString, QVector<int>> patterns;
+    bool holdDetailed = false;
     PremiumBenchmarkController::ProbeFactory factory(FakeBackend &backend) {
         return [this, &backend](QObject *parent) {
-            const int ping = backend.selected == "c" ? 10 : 30;
-            return new FakeProbe(backend.selected == "b" ? QVariantMap{{"state", "timeout"}, {"latencyMs", -1}}
-                : QVariantMap{{"state", "ready"}, {"latencyMs", ping}, {"loss", 0}, {"replies", 5}}, &references, parent);
+            const auto pattern = patterns.value(backend.selected, backend.selected == "b" ? QVector<int>{-1}
+                : QVector<int>{backend.selected == "c" ? 10 : 30});
+            return new FakeProbe(pattern, backend.selected, &references, &trace, holdDetailed, parent);
         };
     }
 private slots:
-    void init() { references.clear(); }
+    void init() { references.clear(); trace.clear(); patterns.clear(); holdDetailed = false; }
     void allLocationsSortAndRestoreConnected() {
         FakeBackend backend;
         PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
@@ -69,7 +82,7 @@ private slots:
         controller.startAll();
         QVERIFY(controller.busy());
         QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 3000);
-        QCOMPARE(backend.loads, QStringList({"a", "b", "c", "a"}));
+        QCOMPARE(backend.loads, QStringList({"a", "b", "c", "c", "a", "a"}));
         QCOMPARE(backend.selected, QString("a"));
         QCOMPARE(backend.connection, BenchmarkBackend::Connected);
         QCOMPARE(backend.preferences.last(), QString("awg"));
@@ -77,7 +90,12 @@ private slots:
         QCOMPARE(rows[0].toMap().value("countryCode").toString(), QString("c"));
         QCOMPARE(rows[1].toMap().value("countryCode").toString(), QString("a"));
         QCOMPARE(rows[2].toMap().value("state").toString(), QString("timeout"));
-        QCOMPARE(references.size(), 3);
+        QCOMPARE(references.size(), 5);
+        QCOMPARE(trace[0].toMap().value("count").toInt(), 5);
+        QCOMPARE(trace[3].toMap().value("count").toInt(), 30);
+        QCOMPARE(trace[3].toMap().value("interval").toInt(), 1000);
+        QCOMPARE(rows[0].toMap().value("sent").toInt(), 30);
+        QCOMPARE(rows[0].toMap().value("measurementStage").toString(), QString("detailed"));
         for (const auto &reference : references) QCOMPARE(reference, QHostAddress("8.8.8.8"));
     }
     void originallyDisconnectedStaysDisconnected() {
@@ -86,7 +104,7 @@ private slots:
         controller.refresh("premium"); controller.startAll();
         QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 3000);
         QCOMPARE(backend.connection, BenchmarkBackend::Disconnected);
-        QCOMPARE(backend.connects, 3);
+        QCOMPARE(backend.connects, 5);
         QCOMPARE(backend.selected, QString("a"));
     }
     void cancellationSerializesPendingApiAndRestoration() {
@@ -111,6 +129,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
         QVERIFY(backend.loads.isEmpty()); QCOMPARE(backend.disconnects, 0); QCOMPARE(backend.connects, 0);
         QCOMPARE(controller.ranking()[0].toMap().value("latencyMs").toInt(), 30);
+        QCOMPARE(trace[0].toMap().value("count").toInt(), 30);
     }
     void failedCountryDoesNotStopTheEntireScan() {
         FakeBackend backend; backend.failConnection = "b";
@@ -149,8 +168,8 @@ private slots:
         backend.delayLoad = false;
         backend.completePending();
         QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
-        QCOMPARE(backend.loads, QStringList({"a", "a", "b", "c", "a"}));
-        QCOMPARE(references.size(), 3);
+        QCOMPARE(backend.loads, QStringList({"a", "a", "b", "c", "c", "a", "a"}));
+        QCOMPARE(references.size(), 5);
     }
     void staleDnsResponseCannotFailANewScan() {
         FakeBackend backend;
@@ -159,8 +178,92 @@ private slots:
         emit backend.referenceResolved(1, QHostAddress());
         controller.startAll();
         QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
-        QCOMPARE(references.size(), 3);
+        QCOMPARE(references.size(), 5);
         QCOMPARE(backend.selected, QString("a"));
+    }
+    void statisticsUseMedianNearestRankAndChronologicalVariation() {
+        const auto result = PingStatistics::summarize({10, 20, -1, 40, 100});
+        QCOMPARE(result.value("replies").toInt(), 4);
+        QCOMPARE(result.value("loss").toDouble(), 20.0);
+        QCOMPARE(result.value("latencyMs").toDouble(), 42.5);
+        QCOMPARE(result.value("medianMs").toDouble(), 30.0);
+        QCOMPARE(result.value("p95Ms").toInt(), 100);
+        QCOMPARE(result.value("jitterPairs").toInt(), 2);
+        QCOMPARE(result.value("jitterMs").toDouble(), 35.0);
+        QVector<int> thirty(30, 10); thirty[28] = 50; thirty[29] = 900;
+        QCOMPARE(PingStatistics::summarize(thirty).value("p95Ms").toInt(), 50);
+    }
+    void missingRepliesNeverBecomeZeroLatencyOrZeroVariation() {
+        const auto none = PingStatistics::summarize({-1, -1, -1});
+        QCOMPARE(none.value("state").toString(), QString("timeout"));
+        QCOMPARE(none.value("loss").toDouble(), 100.0);
+        QCOMPARE(none.value("medianMs").toInt(), -1);
+        QCOMPARE(none.value("jitterMs").toInt(), -1);
+        const auto isolated = PingStatistics::summarize({10, -1, 20});
+        QCOMPARE(isolated.value("jitterMs").toInt(), -1);
+        QVERIFY(qAbs(isolated.value("loss").toDouble() - 100.0 / 3) < 0.001);
+    }
+    void stableLocationBeatsLowerMinimumWithSpikes() {
+        FakeBackend backend;
+        patterns["a"] = {50}; patterns["c"] = {20, 200};
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+        controller.refresh("premium"); controller.startAll();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 2000);
+        QCOMPARE(controller.ranking()[0].toMap().value("countryCode").toString(), QString("a"));
+        QCOMPARE(controller.ranking()[1].toMap().value("jitterMs").toDouble(), 180.0);
+    }
+    void detailedPassIsLimitedToFiveCandidates() {
+        FakeBackend backend; backend.codes = {"a", "b", "c", "d", "e", "f", "g"};
+        for (int i = 0; i < backend.codes.size(); ++i) patterns[backend.codes[i]] = {70 - 10 * i};
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+        controller.refresh("premium"); controller.startAll();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 3000);
+        QCOMPARE(trace.size(), 12);
+        QStringList detailed;
+        for (const auto &entry : trace) if (entry.toMap().value("count").toInt() == 30) detailed.append(entry.toMap().value("country").toString());
+        QCOMPARE(detailed, QStringList({"g", "f", "e", "d", "c"}));
+        QCOMPARE(controller.ranking()[5].toMap().value("measurementStage").toString(), QString("quick"));
+    }
+    void stopDuringDetailedMeasurementRestoresOriginalConnection() {
+        FakeBackend backend; holdDetailed = true;
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+        controller.refresh("premium"); controller.startAll();
+        QTRY_VERIFY_WITH_TIMEOUT(trace.size() == 4, 1000);
+        controller.stop();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
+        QCOMPARE(backend.selected, QString("a"));
+        QCOMPARE(backend.connection, BenchmarkBackend::Connected);
+        QCOMPARE(references.size(), 4);
+    }
+    void observedLossRanksBelowLosslessLocation() {
+        FakeBackend backend;
+        patterns["a"] = {70}; patterns["c"] = {10, 10, -1, 10, 10, 10};
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+        controller.refresh("premium"); controller.startAll();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 2000);
+        QCOMPARE(controller.ranking()[0].toMap().value("countryCode").toString(), QString("a"));
+        QVERIFY(controller.ranking()[1].toMap().value("loss").toDouble() > 0);
+    }
+    void protocolChangeDuringMeasurementStopsWithoutRecordingMixedSamples() {
+        FakeBackend backend; holdDetailed = true;
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+        controller.refresh("premium"); controller.checkCurrent();
+        QTRY_VERIFY_WITH_TIMEOUT(trace.size() == 1, 1000);
+        backend.proto = "xray"; emit backend.changed();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
+        QVERIFY(controller.ranking()[0].toMap().value("state").toString().isEmpty());
+        QCOMPARE(backend.disconnects, 0);
+    }
+    void noGoogleRepliesSkipDetailedPassAndRestore() {
+        FakeBackend backend;
+        for (const auto &code : backend.codes) patterns[code] = {-1};
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+        controller.refresh("premium"); controller.startAll();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 2000);
+        QCOMPARE(trace.size(), 3);
+        QCOMPARE(backend.selected, QString("a"));
+        QCOMPARE(backend.connection, BenchmarkBackend::Connected);
+        for (const auto &item : controller.ranking()) QCOMPARE(item.toMap().value("state").toString(), QString("timeout"));
     }
 };
 QTEST_GUILESS_MAIN(TestPremiumBenchmark)
