@@ -15,8 +15,9 @@ bool stale(const QVariantMap &row)
 }
 }
 
-PremiumBenchmarkController::PremiumBenchmarkController(BenchmarkBackend *backend, QObject *parent, ProbeFactory factory, int settleMsecs)
-    : QObject(parent), m_backend(backend), m_factory(factory), m_settleMsecs(settleMsecs)
+PremiumBenchmarkController::PremiumBenchmarkController(BenchmarkBackend *backend, QObject *parent, ProbeFactory factory,
+                                                       int settleMsecs, int loadTimeoutMsecs)
+    : QObject(parent), m_backend(backend), m_factory(factory), m_settleMsecs(settleMsecs), m_loadTimeoutMsecs(loadTimeoutMsecs)
 {
     if (!m_factory) m_factory = [](QObject *parent) { return new GooglePingProbe(parent); };
     m_timeout.setSingleShot(true);
@@ -24,6 +25,9 @@ PremiumBenchmarkController::PremiumBenchmarkController(BenchmarkBackend *backend
     m_progressTimer.setInterval(1000);
     connect(&m_progressTimer, &QTimer::timeout, this, &PremiumBenchmarkController::progressChanged);
     connect(this, &PremiumBenchmarkController::changed, this, &PremiumBenchmarkController::progressChanged);
+    m_expiryTimer.setInterval(60000);
+    connect(&m_expiryTimer, &QTimer::timeout, this, &PremiumBenchmarkController::changed);
+    m_expiryTimer.start();
     connect(backend, &BenchmarkBackend::changed, this, &PremiumBenchmarkController::onConnectionChanged, Qt::QueuedConnection);
     connect(backend, &BenchmarkBackend::loaded, this, &PremiumBenchmarkController::onLoaded, Qt::QueuedConnection);
     connect(backend, &BenchmarkBackend::referenceResolved, this, [this](quint64 requestId, const QHostAddress &address) {
@@ -301,7 +305,7 @@ void PremiumBenchmarkController::prepareTarget()
 void PremiumBenchmarkController::loadTarget()
 {
     m_cancelled = std::make_shared<std::atomic_bool>(false);
-    setPhase(Loading, 60000, m_restoring ? tr("Restoring the original configuration...")
+    setPhase(Loading, m_loadTimeoutMsecs, m_restoring ? tr("Restoring the original configuration...")
         : tr("Loading location %1 of %2: %3").arg(m_cursor + 1).arg(m_order.size()).arg(target()));
     QString preferred = m_originalProtocol;
     if (m_detailed && !m_restoring) {
@@ -313,9 +317,13 @@ void PremiumBenchmarkController::loadTarget()
     m_backend->load(m_serverId, target(), preferred, ++m_requestId, m_cancelled);
 }
 
-void PremiumBenchmarkController::onLoaded(quint64 requestId, bool success, bool captcha)
+void PremiumBenchmarkController::onLoaded(quint64 requestId, bool success, bool captcha, bool timedOut)
 {
     if (m_phase != Loading || requestId != m_requestId) return;
+    if (timedOut) {
+        finish(tr("Configuration request timed out. Select the original location and reconnect manually."));
+        return;
+    }
     if (m_stopping && !m_restoring) { restore(); return; }
     if (!success) {
         if (m_restoring) { finish(tr("Could not restore the original location. Reconnect manually.")); return; }
@@ -331,7 +339,10 @@ void PremiumBenchmarkController::onLoaded(quint64 requestId, bool success, bool 
         finish(m_stopping ? tr("Stopped. Original location restored.") : completionMessage());
         return;
     }
-    setPhase(Connecting, 35000, m_restoring ? tr("Reconnecting the original location...")
+    // Real AWG handshakes can take a minute. Do not tear the tunnel down
+    // before a slow but healthy connection has a chance to complete.
+    m_connectionAttemptStarted = false;
+    setPhase(Connecting, 90000, m_restoring ? tr("Reconnecting the original location...")
         : tr("Connecting: %1").arg(target()));
     m_backend->connectVpn();
 }
@@ -349,14 +360,33 @@ void PremiumBenchmarkController::onConnectionChanged()
     else if (m_phase == Connecting && state == BenchmarkBackend::Connected) {
         if (m_restoring) finish(m_stopping ? tr("Stopped. Original connection restored.") : completionMessage());
         else settle();
-    } else if (m_phase == Connecting && (state == BenchmarkBackend::Error || state == BenchmarkBackend::Disconnected)) {
+    } else if (m_phase == Connecting && state == BenchmarkBackend::Connecting) {
+        m_connectionAttemptStarted = true;
+    // Ignore a pre-existing Disconnected notification until the queued
+    // connection attempt starts. Immediate backend errors still fail normally.
+    } else if (m_phase == Connecting && (state == BenchmarkBackend::Error
+               || (state == BenchmarkBackend::Disconnected && m_connectionAttemptStarted))) {
         if (m_restoring) finish(tr("Original location restored, but reconnection failed."));
         else { record({{"state", "connectionError"}}); advance(); }
     } else if ((m_phase == Measuring || m_phase == Settling)
                && (state != BenchmarkBackend::Connected || currentCountry() != target()
                    || m_backend->protocol(m_serverId) != m_measureProtocol)) {
-        finish(tr("Test stopped because the VPN connection changed"));
+        connectionChangedDuringMeasurement();
     }
+}
+
+void PremiumBenchmarkController::connectionChangedDuringMeasurement()
+{
+    // A manual country/protocol change belongs to the user. A dropped tunnel
+    // during a switching test must still attempt to return to the initial state.
+    if (m_single || currentCountry() != target() || m_backend->protocol(m_serverId) != m_measureProtocol) {
+        finish(tr("Test stopped because the VPN connection changed"));
+        return;
+    }
+    delete m_probe; m_probe = nullptr;
+    record({{"state", "connectionError"}});
+    m_stopping = true;
+    restore();
 }
 
 void PremiumBenchmarkController::settle()
@@ -369,7 +399,7 @@ void PremiumBenchmarkController::measure()
 {
     if (m_backend->state() != BenchmarkBackend::Connected || currentCountry() != target()
         || m_backend->protocol(m_serverId) != m_measureProtocol) {
-        finish(tr("Test stopped: active location does not match the measurement")); return;
+        connectionChangedDuringMeasurement(); return;
     }
     const auto settings = probeSettings();
     if (m_visitClock.isValid() && !m_single) {
@@ -393,7 +423,7 @@ void PremiumBenchmarkController::measure()
         probe->deleteLater();
         if (m_backend->state() != BenchmarkBackend::Connected || currentCountry() != target()
             || m_backend->protocol(m_serverId) != m_measureProtocol) {
-            finish(tr("Test stopped: active location changed")); return;
+            connectionChangedDuringMeasurement(); return;
         }
         record(result);
         advance();
@@ -489,10 +519,9 @@ void PremiumBenchmarkController::onTimeout()
     if (m_phase == Settling) { measure(); return; }
     if (m_phase == Resolving) { finish(tr("Could not resolve google.com")); return; }
     if (m_phase == Loading) {
-        m_stopping = true;
-        if (m_cancelled) m_cancelled->store(true);
-        m_status = tr("Request timed out: waiting for it to finish before restoration...");
-        emit changed();
+        // The backend has its own total deadline. This watchdog also bounds a
+        // broken backend; canStart remains false while a request is outstanding.
+        finish(tr("Configuration request timed out. Select the original location and reconnect manually."));
         return;
     }
     if (m_phase == Disconnecting) {

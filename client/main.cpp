@@ -94,6 +94,7 @@ int main(int argc, char *argv[])
         app.init();
 
         qInfo().noquote() << QString("Started %1 version %2 %3").arg(APPLICATION_NAME, APP_VERSION, GIT_COMMIT_HASH);
+        qInfo() << "Google Ping fork UI v5.2; quick ping: 3 ICMP requests, no reconnect";
         qInfo().noquote() << QString("%1 (%2)").arg(QSysInfo::prettyProductName(), QSysInfo::currentCpuArchitecture());
 
         return app.exec();

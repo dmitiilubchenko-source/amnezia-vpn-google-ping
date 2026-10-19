@@ -116,11 +116,15 @@ void AmneziaBenchmarkBackend::resolveReference(quint64 requestId, std::shared_pt
 void AmneziaBenchmarkBackend::load(const QString &id, const QString &code, const QString &preferred,
                                   quint64 requestId, std::shared_ptr<std::atomic_bool> cancelled)
 {
+    ++m_pendingLoads;
     auto *watcher = new QFutureWatcher<amnezia::ErrorCode>(this);
     connect(watcher, &QFutureWatcher<amnezia::ErrorCode>::finished, this, [this, watcher, cancelled, requestId]() {
         const auto error = watcher->result();
         watcher->deleteLater();
-        emit loaded(requestId, !cancelled->load() && error == amnezia::ErrorCode::NoError, error == amnezia::ErrorCode::ApiCaptchaRequiredError);
+        --m_pendingLoads;
+        emit loaded(requestId, !cancelled->load() && error == amnezia::ErrorCode::NoError,
+            error == amnezia::ErrorCode::ApiCaptchaRequiredError, error == amnezia::ErrorCode::ApiConfigTimeoutError);
+        emit changed();
     });
     watcher->setFuture(m_subscription->updateBenchmarkCountry(id, code, this, cancelled, preferred));
 }

@@ -3,6 +3,7 @@
 #include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QDebug>
 #include "core/repositories/secureServersRepository.h"
 #include "secureQSettings.h"
 #include "ui/controllers/connectionUiController.h"
@@ -64,7 +65,8 @@ bool PremiumLatencyController::supported() const
 
 bool PremiumLatencyController::available() const
 {
-    return supported() && !m_connection->isConnected() && !m_connection->isConnectionInProgress();
+    // Probe known endpoints over the current route. Never reconnect the VPN.
+    return supported() && !m_connection->isConnectionInProgress();
 }
 
 bool PremiumLatencyController::isPremium() const
@@ -130,6 +132,28 @@ void PremiumLatencyController::checkConnected(const QString &serverId)
 QVariantMap PremiumLatencyController::results() const
 {
     return m_results;
+}
+
+QString PremiumLatencyController::status() const
+{
+    if (!m_hasRun) return {};
+    int known = 0, ready = 0, missing = 0, errors = 0, checking = 0;
+    for (const auto &item : m_results) {
+        const auto state = item.toMap().value("state").toString();
+        if (state == "unknown") continue;
+        ++known;
+        if (state == "ready") ++ready;
+        else if (state == "timeout") ++missing;
+        else if (state == "checking") ++checking;
+        else if (state != "idle") ++errors;
+    }
+    if (!known) return tr("No known server addresses. Connect to a location once to remember its address. Unknown: —");
+    if (checking) return tr("Pinging servers: %1 of %2 complete. Unknown addresses: %3.")
+        .arg(known - checking).arg(known).arg(m_results.size() - known);
+    auto text = tr("Server ping: %1/%2 replied; no reply: %3; errors: %4; unknown: %5.")
+        .arg(ready).arg(known).arg(missing).arg(errors).arg(m_results.size() - known);
+    if (missing) text += "\n" + tr("A server can block ICMP while the VPN still works.");
+    return text;
 }
 
 void PremiumLatencyController::saveCache()
@@ -221,6 +245,7 @@ void PremiumLatencyController::checkAll(const QString &serverId)
         return;
     }
     refresh(serverId);
+    m_hasRun = true;
     m_results.clear();
     updateResults();
     for (auto it = m_results.begin(); it != m_results.end(); ++it) {
@@ -229,6 +254,8 @@ void PremiumLatencyController::checkAll(const QString &serverId)
             it.value() = QVariantMap{{"state", "checking"}};
         }
     }
+    qInfo() << "ServerPing: starting" << m_pending.size() << "known endpoints;"
+            << m_results.size() - m_pending.size() << "unknown; current route, no reconnect";
     emit resultsChanged();
     for (int i = 0; i < 4; ++i) {
         startNext();
@@ -248,6 +275,9 @@ void PremiumLatencyController::startNext()
         m_probes.remove(probe);
         probe->deleteLater();
         m_results[country] = measurement;
+        qInfo() << "ServerPing:" << country << measurement.value("state").toString()
+                << "replies" << measurement.value("replies").toInt()
+                << "Windows status" << measurement.value("errorCode").toUInt();
         emit resultsChanged();
         startNext();
         emit busyChanged();
@@ -257,6 +287,7 @@ void PremiumLatencyController::startNext()
 
 void PremiumLatencyController::cancel()
 {
+    m_hasRun = false;
     auto *tunnelProbe = m_tunnelProbe;
     m_tunnelProbe = nullptr;
     delete tunnelProbe;

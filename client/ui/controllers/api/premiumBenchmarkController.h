@@ -22,12 +22,13 @@ public:
                       quint64 requestId, std::shared_ptr<std::atomic_bool> cancelled) = 0;
     virtual void connectVpn() = 0;
     virtual void disconnectVpn() = 0;
+    virtual bool configurationPending() const { return false; }
     virtual QVariantMap preferences(const QString &) const { return {}; }
     virtual void savePreferences(const QString &, const QVariantMap &) {}
 signals:
     void changed();
     void referenceResolved(quint64 requestId, const QHostAddress &address);
-    void loaded(quint64 requestId, bool success, bool captcha);
+    void loaded(quint64 requestId, bool success, bool captcha, bool timedOut = false);
 };
 
 class PremiumBenchmarkController : public QObject {
@@ -44,10 +45,12 @@ class PremiumBenchmarkController : public QObject {
     Q_PROPERTY(QString progressText READ progressText NOTIFY progressChanged)
 public:
     using ProbeFactory = std::function<BenchmarkProbe *(QObject *)>;
-    PremiumBenchmarkController(BenchmarkBackend *backend, QObject *parent = nullptr, ProbeFactory factory = {}, int settleMsecs = 2000);
+    PremiumBenchmarkController(BenchmarkBackend *backend, QObject *parent = nullptr, ProbeFactory factory = {},
+                               int settleMsecs = 2000, int loadTimeoutMsecs = 65000);
     ~PremiumBenchmarkController() override;
     bool busy() const { return m_phase != Idle; }
-    bool canStart() const { return !busy() && m_backend->eligible(m_serverId) && m_backend->state() != BenchmarkBackend::Connecting; }
+    bool canStart() const { return !busy() && !m_backend->configurationPending()
+        && m_backend->eligible(m_serverId) && m_backend->state() != BenchmarkBackend::Connecting; }
     bool canMeasure() const { return canStart() && m_backend->state() == BenchmarkBackend::Connected; }
     QString status() const { return m_status; }
     QString currentCountry() const { return m_backend->country(m_serverId); }
@@ -78,13 +81,14 @@ private:
     void prepareTarget();
     void loadTarget();
     void onConnectionChanged();
-    void onLoaded(quint64 requestId, bool success, bool captcha);
+    void onLoaded(quint64 requestId, bool success, bool captcha, bool timedOut);
     void settle();
     void measure();
     void record(const QVariantMap &result);
     void advance();
     bool beginDetailedPass();
     void restore();
+    void connectionChangedDuringMeasurement();
     void finish(const QString &message);
     void onTimeout();
     QString target() const;
@@ -95,8 +99,10 @@ private:
     BenchmarkBackend *m_backend;
     ProbeFactory m_factory;
     int m_settleMsecs;
+    int m_loadTimeoutMsecs;
     QTimer m_timeout;
     QTimer m_progressTimer;
+    QTimer m_expiryTimer;
     QElapsedTimer m_visitClock;
     Phase m_phase = Idle;
     QString m_serverId, m_originalCountry, m_originalProtocol, m_measureProtocol, m_status;
@@ -109,6 +115,7 @@ private:
     double m_connectionSeconds = 8;
     quint64 m_requestId = 0;
     bool m_single = false, m_detailed = false, m_originalConnected = false, m_restoring = false, m_stopping = false;
+    bool m_connectionAttemptStarted = false;
     QHostAddress m_reference;
     BenchmarkProbe *m_probe = nullptr;
     std::shared_ptr<std::atomic_bool> m_cancelled;

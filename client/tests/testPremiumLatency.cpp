@@ -13,6 +13,7 @@
 #include "core/repositories/secureAppSettingsRepository.h"
 #include "ui/controllers/connectionUiController.h"
 #include "ui/controllers/api/amneziaBenchmarkBackend.h"
+#include "mozilla/localsocketcontroller.h"
 
 class TestPremiumLatency : public QObject
 {
@@ -29,6 +30,52 @@ class TestPremiumLatency : public QObject
     }
 
 private slots:
+    void daemonStatusDateDoesNotBlockInitialization_data()
+    {
+        QTest::addColumn<QString>("date");
+        QTest::newRow("iso") << QString("2026-10-19T07:00:00Z");
+        QTest::newRow("text") << QDateTime::currentDateTime().toString(Qt::TextDate);
+        QTest::newRow("invalid") << QString("invalid service date");
+        QTest::newRow("missing") << QString();
+    }
+
+    void daemonStatusDateDoesNotBlockInitialization()
+    {
+        QFETCH(QString, date);
+        LocalSocketController controller;
+        // Exercise parsing in isolation: no pipe, daemon or live tunnel.
+        controller.m_daemonState = LocalSocketController::eInitializing;
+        QSignalSpy spy(&controller, &ControllerImpl::initialized);
+        QJsonObject status{{"type", "status"}, {"connected", true}};
+        if (!date.isEmpty()) status["date"] = date;
+        controller.parseCommand(QJsonDocument(status).toJson(QJsonDocument::Compact));
+        QCOMPARE(spy.size(), 1);
+        QVERIFY(spy.first().at(0).toBool());
+        QVERIFY(spy.first().at(1).toBool());
+        QVERIFY(spy.first().at(2).toDateTime().isValid());
+    }
+
+    void quickPingReportsKnownAndUnknownAddresses()
+    {
+        SecureQSettings settings("AmneziaVPN-Test", QUuid::createUuid().toString(), nullptr, false);
+        SecureServersRepository servers(&settings);
+        const auto id = servers.addServer({}, config("127.0.0.1").toJson(), serverConfigUtils::ConfigType::AmneziaPremiumV2);
+        ConnectionUiController connection(nullptr, nullptr);
+        PremiumLatencyController controller(&servers, &settings, &connection);
+        controller.refresh(id);
+        QVERIFY(controller.status().isEmpty());
+#ifdef Q_OS_WIN
+        controller.checkAll(id);
+        QVERIFY(!controller.status().isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 8000);
+        QCOMPARE(controller.results().value("de").toMap().value("state").toString(), QString("ready"));
+        QCOMPARE(controller.results().value("nl").toMap().value("state").toString(), QString("unknown"));
+        QVERIFY(controller.status().contains("1/1"));
+        QVERIFY(controller.status().contains("unknown: 1"));
+#endif
+        settings.clearSettings();
+    }
+
     void freshProfileHasNoBundledSubscription()
     {
         SecureQSettings settings("AmneziaVPN-Test", QUuid::createUuid().toString(), nullptr, false);

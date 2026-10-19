@@ -413,7 +413,7 @@ QFuture<ErrorCode> SubscriptionController::updateBenchmarkCountry(const QString 
         promise->addResult(error);
         promise->finish();
     });
-    watcher->setFuture(gateway->postAsync(QString("%1v1/config"), payload));
+    watcher->setFuture(gateway->postAsync(QString("%1v1/config"), payload, 60000));
     return promise->future();
 }
 

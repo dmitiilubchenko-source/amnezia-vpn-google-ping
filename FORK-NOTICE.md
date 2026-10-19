@@ -1,6 +1,6 @@
 # Unofficial AmneziaVPN Google Ping & Rank
 
-Modified distribution by [dmitiilubchenko-source](https://github.com/dmitiilubchenko-source), dated **2026-10-18**, based on [amnezia-vpn/amnezia-client](https://github.com/amnezia-vpn/amnezia-client), tag **5.0.3.0**, commit **de93650**.
+Modified distribution by [dmitiilubchenko-source](https://github.com/dmitiilubchenko-source), dated **2026-10-19**, based on [amnezia-vpn/amnezia-client](https://github.com/amnezia-vpn/amnezia-client), tag **5.0.3.0**, commit **de93650**.
 
 This is an independent, experimental fork, not an official Amnezia release. It is not affiliated with, endorsed by, or signed by the Amnezia developers. The original Amnezia project and its contributors retain their authorship and copyright. Amnezia names and artwork identify the upstream project; no trademark ownership or endorsement is claimed.
 
@@ -19,9 +19,15 @@ The client and these modifications are distributed under the **GNU GPL version 3
 - Russian interface strings and a visible v5 marker on the Google Ping & Rank page.
 - An explicit message when another client instance prevents this build from starting.
 - Automated tests, dependency lockfile, build instructions and scripts. Earlier diagnostic ICMP/HTTPS modules remain in the source.
+- v5.1 fixes: attempted restoration after unexpected tunnel drops, bounded configuration requests, separate local ICMP failures, periodic stale-result refresh, and build-script test execution. These changes are included in the local v5.1 build; the previously published v5 EXE does not include them.
+- Post-v5 addition: one speedometer button pings known cached server endpoints with three ICMP requests and up to four concurrent probes. It does not switch the VPN or request new configurations. Unknown/expired endpoints are shown as a dash; connected checks use the current route. Per-country five-request buttons were removed.
 
 Premium authentication and subscription requirements are unchanged. Users supply their own subscription. This distribution includes no user's VPN keys, account settings or credentials.
 
 Source for the modified application is in this repository and in the source asset attached to the same release as the Windows binary. The source asset includes initialized third-party submodules, unlike GitHub's automatic source ZIP. Build scripts and configuration are in [BUILD-GOOGLE-PING.md](BUILD-GOOGLE-PING.md) and `tools/`; dependency recipes and source URLs are included in `recipes/`.
 
 The v3 Windows artifact was compiled from upstream de93650 plus its changes; v4 was compiled from fork commit 2def035 plus the v4 changes; v5 was compiled from fork commit 000728d plus the v5 changes, before their respective publication commits were created. The source asset on each release contains that release's changes. Byte-for-byte reproduction also depends on timestamps, toolchains and downloaded packages. Previous releases and tags are retained.
+
+The local v5.1 build was compiled on 2026-10-19 from fork commit ef4516b plus the changes described in FIXES-VALIDATION.md. Its modified Windows source archive includes the initialized Windows submodules. The package includes all dependency notices retained from v5, the same dependency versions, new Windows test logs, and a UI preview explicitly marked as test data.
+
+The local v5.2 update fixes a queued-connect benchmark race, waits up to 90 seconds for the tunnel, accepts invalid informational service dates without dropping initialization, and distinguishes missing server ICMP replies from Windows API errors. The quick-ping summary reports known/unknown targets and outcomes; diagnostics omit endpoint addresses and credentials.

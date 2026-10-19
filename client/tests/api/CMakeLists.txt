@@ -25,3 +25,8 @@ add_test(NAME PremiumLatencyTest COMMAND test_premium_latency)
 add_executable(test_premium_benchmark ../testPremiumBenchmark.cpp)
 target_link_libraries(test_premium_benchmark PRIVATE Qt6::Test test_common)
 add_test(NAME PremiumBenchmarkTest COMMAND test_premium_benchmark)
+
+add_executable(test_gateway_request_deadline ../testGatewayRequestDeadline.cpp)
+target_include_directories(test_gateway_request_deadline PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+target_link_libraries(test_gateway_request_deadline PRIVATE Qt6::Test Qt6::Network)
+add_test(NAME GatewayRequestDeadlineTest COMMAND test_gateway_request_deadline)

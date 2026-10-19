@@ -13,8 +13,17 @@ qt6_add_resources(TEST_QRC
 set(_main_cpp "${CMAKE_CURRENT_SOURCE_DIR}/../main.cpp")
 get_filename_component(_main_cpp "${_main_cpp}" REALPATH)
 
-set(TEST_SOURCES ${SOURCES})
-list(REMOVE_ITEM TEST_SOURCES "${_main_cpp}")
+set(TEST_SOURCES)
+foreach(_test_source IN LISTS SOURCES)
+    # Both sides must use the same canonical path when the checkout is reached
+    # through a Windows junction. Otherwise main.cpp stays in test_common.
+    get_filename_component(_test_source_real "${_test_source}" REALPATH)
+    if(NOT _test_source_real STREQUAL _main_cpp)
+        list(APPEND TEST_SOURCES "${_test_source}")
+    endif()
+endforeach()
+unset(_test_source)
+unset(_test_source_real)
 
 add_library(test_common OBJECT
     ${TEST_SOURCES}

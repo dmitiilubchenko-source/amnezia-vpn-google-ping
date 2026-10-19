@@ -3,6 +3,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QDateTime>
+#include <algorithm>
 #include "ui/controllers/api/premiumBenchmarkController.h"
 #include "ui/controllers/api/pingStatistics.h"
 
@@ -10,7 +11,8 @@ class FakeBackend final : public BenchmarkBackend {
 public:
     State connection = Connected;
     QString selected = "a", proto = "awg", failConnection;
-    bool allowed = true, delayLoad = false;
+    bool allowed = true, delayLoad = false, guardPending = false, delayConnect = false, queuedConnect = false;
+    quint64 lastRequestId = 0;
     QStringList loads, protocolPreferences;
     QStringList codes{"a", "b", "c"};
     int connects = 0, disconnects = 0;
@@ -22,6 +24,7 @@ public:
     }
     bool eligible(const QString &id) const override { return allowed && id == "premium"; }
     State state() const override { return connection; }
+    bool configurationPending() const override { return guardPending && bool(pending); }
     QVariantList countries(const QString &) const override {
         QVariantList rows;
         for (const auto &code : codes) rows.append(QVariantMap{{"countryCode", code}, {"countryName", code.toUpper()}});
@@ -35,6 +38,7 @@ public:
         });
     }
     void load(const QString &, const QString &code, const QString &preferred, quint64 requestId, std::shared_ptr<std::atomic_bool> cancelled) override {
+        lastRequestId = requestId;
         loads.append(code); protocolPreferences.append(preferred);
         auto complete = [this, code, preferred, cancelled, requestId]() {
             if (!cancelled->load()) { selected = code; if (!preferred.isEmpty()) proto = preferred; }
@@ -42,9 +46,19 @@ public:
         };
         if (delayLoad) pending = complete; else QTimer::singleShot(0, this, complete);
     }
-    void connectVpn() override { ++connects; connection = selected == failConnection ? Error : Connected; emit changed(); }
+    void connectVpn() override {
+        ++connects;
+        if (queuedConnect) {
+            // The real backend queues openConnectionRequested; older config
+            // notifications may still report Disconnected before it executes.
+            emit changed();
+            QTimer::singleShot(20, this, [this]() { connection = Connected; emit changed(); });
+            return;
+        }
+        connection = delayConnect ? Connecting : selected == failConnection ? Error : Connected; emit changed();
+    }
     void disconnectVpn() override { ++disconnects; connection = Disconnected; emit changed(); }
-    void completePending() { const auto callback = pending; pending = {}; if (callback) callback(); }
+    void completePending() { const auto callback = pending; pending = {}; if (callback) callback(); emit changed(); }
 };
 
 class FakeProbe final : public BenchmarkProbe {
@@ -82,6 +96,37 @@ private:
         };
     }
 private slots:
+    void queuedConnectDoesNotTreatOldDisconnectedStatusAsFailure() {
+        FakeBackend backend; backend.queuedConnect = true;
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+        controller.refresh("premium"); controller.checkCountry("c");
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1500);
+        QCOMPARE(trace.size(), 1);
+        QCOMPARE(backend.loads, QStringList({"c", "a"}));
+        QCOMPARE(backend.connects, 2);
+        QCOMPARE(backend.selected, QString("a"));
+        const auto rows = controller.ranking();
+        auto checked = std::find_if(rows.begin(), rows.end(), [](const QVariant &item) {
+            return item.toMap().value("countryCode") == "c";
+        });
+        QVERIFY(checked != rows.end());
+        QCOMPARE(checked->toMap().value("state").toString(), QString("ready"));
+    }
+    void slowHandshakeIsNotAbortedAfter35Seconds() {
+        FakeBackend backend; backend.delayConnect = true;
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+        controller.refresh("premium"); controller.checkCountry("c");
+        QTRY_COMPARE_WITH_TIMEOUT(backend.connects, 1, 1000);
+        // Wait past the old 35-second deadline with a real event loop.
+        QTest::qWait(36000);
+        QVERIFY(controller.busy());
+        QCOMPARE(backend.connects, 1);
+        backend.delayConnect = false;
+        backend.connection = BenchmarkBackend::Connected; emit backend.changed();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
+        QCOMPARE(backend.selected, QString("a"));
+        QCOMPARE(trace.size(), 1);
+    }
     void init() { references.clear(); trace.clear(); patterns.clear(); holdDetailed = false; }
     void allLocationsSortAndRestoreConnected() {
         FakeBackend backend;
@@ -343,7 +388,8 @@ private slots:
     void invalidSelectionsAndEmptyFavoritesDoNotChangeVpn() {
         FakeBackend backend;
         PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
-        controller.refresh("premium"); controller.startFavorites(); controller.checkCountry("unknown"); controller.toggleFavorite("unknown");
+        controller.refresh("premium"); controller.startFavorites(); controller.checkCountry("unknown");
+        controller.toggleFavorite("unknown");
         QVERIFY(!controller.busy()); QVERIFY(backend.loads.isEmpty());
         QCOMPARE(controller.favoriteCount(), 0);
     }
@@ -360,6 +406,101 @@ private slots:
         controller.stop();
         QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
         QCOMPARE(backend.selected, QString("a"));
+    }
+    void droppedTunnelRestoresOriginalConnection_data() {
+        QTest::addColumn<int>("state");
+        QTest::newRow("disconnected") << int(BenchmarkBackend::Disconnected);
+        QTest::newRow("reconnecting") << int(BenchmarkBackend::Connecting);
+        QTest::newRow("error") << int(BenchmarkBackend::Error);
+    }
+    void droppedTunnelRestoresOriginalConnection() {
+        QFETCH(int, state);
+        FakeBackend backend; holdDetailed = true;
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+        controller.refresh("premium"); controller.checkCountry("c");
+        QTRY_COMPARE_WITH_TIMEOUT(trace.size(), 1, 1000);
+        backend.connection = BenchmarkBackend::State(state); emit backend.changed();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
+        QCOMPARE(backend.loads, QStringList({"c", "a"}));
+        QCOMPARE(backend.selected, QString("a"));
+        QCOMPARE(backend.connection, BenchmarkBackend::Connected);
+        QCOMPARE(controller.ranking()[0].toMap().value("state").toString(), QString("connectionError"));
+    }
+    void droppedTunnelWhileSettlingRestoresOriginallyDisconnectedState() {
+        FakeBackend backend; backend.connection = BenchmarkBackend::Disconnected;
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 1000);
+        controller.refresh("premium"); controller.checkCountry("c");
+        QTRY_COMPARE_WITH_TIMEOUT(backend.selected, QString("c"), 500);
+        backend.connection = BenchmarkBackend::Disconnected; emit backend.changed();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
+        QCOMPARE(backend.selected, QString("a"));
+        QCOMPARE(backend.connection, BenchmarkBackend::Disconnected);
+        QCOMPARE(backend.loads, QStringList({"c", "a"}));
+        QVERIFY(trace.isEmpty());
+    }
+    void manualProtocolChangeDuringSwitchingTestIsPreserved() {
+        FakeBackend backend; holdDetailed = true;
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+        controller.refresh("premium"); controller.checkCountry("c");
+        QTRY_COMPARE_WITH_TIMEOUT(trace.size(), 1, 1000);
+        backend.proto = "xray"; emit backend.changed();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
+        QCOMPARE(backend.loads, QStringList({"c"}));
+        QCOMPARE(backend.proto, QString("xray"));
+    }
+    void droppedCurrentTunnelDoesNotSwitchOrReconnect() {
+        FakeBackend backend; holdDetailed = true;
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+        controller.refresh("premium"); controller.checkCurrent();
+        QTRY_COMPARE_WITH_TIMEOUT(trace.size(), 1, 1000);
+        backend.connection = BenchmarkBackend::Disconnected; emit backend.changed();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
+        QVERIFY(backend.loads.isEmpty());
+        QCOMPARE(backend.connects, 0);
+    }
+    void stalledConfigurationHasBoundedWaitAndBlocksOverlappingRestart() {
+        FakeBackend backend; backend.delayLoad = backend.guardPending = true;
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0, 100);
+        controller.refresh("premium"); controller.startAll();
+        QTRY_VERIFY_WITH_TIMEOUT(bool(backend.pending), 500);
+        controller.stop();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
+        QVERIFY(controller.status().contains("timed out"));
+        QVERIFY(!controller.canStart());
+        controller.startAll(); QCOMPARE(backend.loads.size(), 1);
+        backend.completePending();
+        QTest::qWait(20);
+        QVERIFY(controller.canStart());
+        QCOMPARE(backend.connects, 0);
+        QCOMPARE(backend.loads.size(), 1);
+    }
+    void backendDeadlineStopsWithoutIssuingAnotherConfiguration() {
+        FakeBackend backend; backend.delayLoad = true;
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0);
+        controller.refresh("premium"); controller.startAll();
+        QTRY_VERIFY_WITH_TIMEOUT(bool(backend.pending), 500);
+        emit backend.loaded(backend.lastRequestId, false, false, true);
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 500);
+        QVERIFY(controller.status().contains("reconnect manually"));
+        QCOMPARE(backend.loads.size(), 1);
+        backend.completePending();
+        QTest::qWait(20);
+        QVERIFY(!controller.busy()); QCOMPARE(backend.connects, 0);
+    }
+    void stalledRestorationAlsoHasBoundedWait() {
+        FakeBackend backend; holdDetailed = true;
+        PremiumBenchmarkController controller(&backend, nullptr, factory(backend), 0, 100);
+        controller.refresh("premium"); controller.checkCountry("c");
+        QTRY_COMPARE_WITH_TIMEOUT(trace.size(), 1, 1000);
+        backend.delayLoad = true; controller.stop();
+        QTRY_VERIFY_WITH_TIMEOUT(bool(backend.pending), 500);
+        controller.stop(); // Restoration cannot be interrupted by this button.
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 1000);
+        QVERIFY(controller.status().contains("reconnect manually"));
+        QCOMPARE(backend.loads, QStringList({"c", "a"}));
+        const int connects = backend.connects;
+        backend.completePending(); QTest::qWait(20);
+        QCOMPARE(backend.connects, connects);
     }
 };
 QTEST_GUILESS_MAIN(TestPremiumBenchmark)

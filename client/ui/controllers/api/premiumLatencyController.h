@@ -22,6 +22,7 @@ class PremiumLatencyController : public QObject
     Q_PROPERTY(bool available READ available NOTIFY availabilityChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(QVariantMap results READ results NOTIFY resultsChanged)
+    Q_PROPERTY(QString status READ status NOTIFY resultsChanged)
     Q_PROPERTY(QVariantMap tunnelResults READ tunnelResults NOTIFY resultsChanged)
     Q_PROPERTY(bool tunnelAvailable READ tunnelAvailable NOTIFY availabilityChanged)
 public:
@@ -33,6 +34,7 @@ public:
     bool available() const;
     bool busy() const;
     QVariantMap results() const;
+    QString status() const;
     QVariantMap tunnelResults() const { return m_tunnelResults; }
     bool tunnelAvailable() const;
     void setAppSettings(SecureAppSettingsRepository *settings);
@@ -67,6 +69,7 @@ private:
     SecureAppSettingsRepository *m_appSettings = nullptr;
     QVariantMap m_tunnelResults;
     QString m_comparisonProtocol;
+    bool m_hasRun = false;
 };
 
 #endif

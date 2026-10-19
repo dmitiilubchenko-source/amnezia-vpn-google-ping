@@ -7,6 +7,7 @@
 #include <QPair>
 #include <QPromise>
 #include <QSharedPointer>
+#include "gatewayRequestDeadline.h"
 
 #include "core/utils/errorCodes.h"
 #include "core/utils/routeModes.h"
@@ -28,9 +29,13 @@ public:
                                QObject *parent = nullptr);
 
     amnezia::ErrorCode post(const QString &endpoint, const QJsonObject apiPayload, QByteArray &responseBody);
-    QFuture<QPair<amnezia::ErrorCode, QByteArray>> postAsync(const QString &endpoint, const QJsonObject apiPayload);
+    // A nonzero total timeout is for a dedicated, one-operation controller.
+    QFuture<QPair<amnezia::ErrorCode, QByteArray>> postAsync(const QString &endpoint, const QJsonObject apiPayload,
+                                                          int totalTimeoutMsecs = 0);
 
 private:
+    GatewayRequestDeadline m_asyncDeadline;
+
     struct EncryptedRequestData
     {
         QNetworkRequest request;

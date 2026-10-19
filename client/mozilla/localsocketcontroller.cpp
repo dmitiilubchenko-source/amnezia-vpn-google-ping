@@ -387,15 +387,14 @@ void LocalSocketController::parseCommand(const QByteArray& command) {
     QDateTime datetime;
     if (connected.toBool()) {
       QJsonValue date = obj.value("date");
-      if (!date.isString()) {
-        logger.error() << "Invalid JSON for status - date expected";
-        return;
-      }
-
-      datetime = QDateTime::fromString(date.toString());
+      datetime = QDateTime::fromString(date.toString(), Qt::ISODateWithMs);
+      if (!datetime.isValid()) datetime = QDateTime::fromString(date.toString(), Qt::ISODate);
+      if (!datetime.isValid()) datetime = QDateTime::fromString(date.toString(), Qt::TextDate);
       if (!datetime.isValid()) {
-        logger.error() << "Invalid JSON for status - date is invalid";
-        return;
+        // The timestamp is informational. An older service may return an
+        // invalid/locale-specific value; still complete initialization.
+        logger.warning() << "Invalid connection date in status; using the current time";
+        datetime = QDateTime::currentDateTime();
       }
     }
 

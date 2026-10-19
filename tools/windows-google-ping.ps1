@@ -2,6 +2,8 @@ param(
     [Parameter(Mandatory=$true)][string]$QtRoot,
     [string]$BuildDir,
     [string]$PackageDir,
+    [string]$MsvcEnvironment,
+    [string]$ConanProfile,
     [ValidateRange(1,64)][int]$Jobs = 6,
     [switch]$ConfigureOnly
 )
@@ -16,29 +18,38 @@ foreach ($dependency in @('client\3rd\qtkeychain\CMakeLists.txt','client\3rd\Sor
     if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $dependency))) { throw 'Initialize submodules with git submodule update --init --recursive, or use the complete source release ZIP.' }
 }
 foreach ($program in @('cmake','conan','ninja')) { $null = Get-Command $program -ErrorAction Stop }
-$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-if (-not (Test-Path -LiteralPath $vswhere)) { throw 'Install Visual Studio 2022 Build Tools with MSVC v143 and Windows SDK.' }
-$vsPath = & $vswhere -latest -version '[17.0,18.0)' -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-if (-not $vsPath) { throw 'MSVC 2022 x64 toolchain was not found.' }
-$vcvars = Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat'
+if ($MsvcEnvironment) {
+    $vcvars = (Resolve-Path -LiteralPath $MsvcEnvironment).Path
+} else {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path -LiteralPath $vswhere)) { throw 'Install Visual Studio 2022 Build Tools or provide -MsvcEnvironment with a compiler environment batch file.' }
+    $vsPath = & $vswhere -latest -version '[17.0,18.0)' -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    if (-not $vsPath) { throw 'MSVC 2022 x64 toolchain was not found.' }
+    $vcvars = Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat'
+}
 $env:PROD_AGW_PUBLIC_KEY = ([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'gateway-public.pem'))).Replace("`r",'').Replace("`n",'\n')
 $env:DEV_AGW_PUBLIC_KEY = ''
 $env:PROD_S3_ENDPOINT = 'https://s3.cloudruserapi.net/lambda-list/, https://storage.mwsapis.ru/lambda-list/'
 $env:FALLBACK_S3_ENDPOINT = 'https://storage.googleapis.com/lambda-list/, https://objectstorage.eu-zurich-1.oraclecloud.com/n/zrhfyaq6qxvh/b/lambda-list/o/'
 $env:FREE_V2_ENDPOINT = '__legacy_free_not_configured__'
 $env:PREM_V1_ENDPOINT = '__legacy_premium_not_configured__'
-$profile = (Join-Path $PSScriptRoot 'windows-release.profile').Replace('\','/')
+if (-not $ConanProfile) { $ConanProfile = Join-Path $PSScriptRoot 'windows-release.profile' }
+$profile = (Resolve-Path -LiteralPath $ConanProfile).Path.Replace('\','/')
 $runner = Join-Path $BuildDir 'google-ping-runner.cmd'
 $null = New-Item -ItemType Directory -Path $BuildDir -Force
 # A runner avoids losing the MSVC environment when vcvars64.bat returns.
-$commands = @('@echo off', 'chcp 65001 >nul', ('call "' + $vcvars + '"'), 'if errorlevel 1 exit /b %errorlevel%',
+$commands = @('@echo off', 'chcp 65001 >nul', ('call "' + $vcvars + '"'), 'if not "%errorlevel%"=="0" exit /b %errorlevel%',
     ('cmake -S "' + $sourceRoot + '" -B "' + $BuildDir + '" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="' + $QtRoot + '" -DAMNEZIA_BUILD_TESTS=ON -DCONAN_INSTALL_BUILD_CONFIGURATIONS=Release -DCLIENT_ENABLE_APP_UPDATES=0 -DCONAN_HOST_PROFILE="' + $profile + '" -DCONAN_BUILD_PROFILE="' + $profile + '"'),
-    'if errorlevel 1 exit /b %errorlevel%')
+    'if not "%errorlevel%"=="0" exit /b %errorlevel%')
 if (-not $ConfigureOnly) {
-    $commands += ('cmake --build "' + $BuildDir + '" --target AmneziaVPN AmneziaVPN-service test_premium_latency test_premium_benchmark --parallel ' + $Jobs)
-    $commands += 'if errorlevel 1 exit /b %errorlevel%'
+    $commands += ('cmake --build "' + $BuildDir + '" --target AmneziaVPN AmneziaVPN-service test_premium_latency test_premium_benchmark test_gateway_request_deadline --parallel ' + $Jobs)
+    $commands += 'if not "%errorlevel%"=="0" exit /b %errorlevel%'
     $commands += ('cmake --install "' + $BuildDir + '" --prefix "' + $PackageDir + '" --component AmneziaVPN --config Release')
-    $commands += 'if errorlevel 1 exit /b %errorlevel%'
+    $commands += 'if not "%errorlevel%"=="0" exit /b %errorlevel%'
+    $commands += ('set "PATH=' + $PackageDir + ';' + (Join-Path $QtRoot 'bin') + ';%PATH%"')
+    $commands += 'set QT_FORCE_STDERR_LOGGING=1'
+    $commands += ('ctest --test-dir "' + (Join-Path $BuildDir 'client\tests') + '" -C Release -R "^(PremiumLatencyTest|PremiumBenchmarkTest|GatewayRequestDeadlineTest)$" --output-on-failure')
+    $commands += 'if not "%errorlevel%"=="0" exit /b %errorlevel%'
 }
 $commands += 'exit /b 0'
 [IO.File]::WriteAllLines($runner, $commands, (New-Object Text.UTF8Encoding($false)))
@@ -59,7 +70,7 @@ if (-not $ConfigureOnly) {
         $installerScript = Join-Path $PackageDir $name
         if (Test-Path -LiteralPath $installerScript) { Remove-Item -LiteralPath $installerScript }
     }
-    foreach ($name in @('LICENSE','THIRD_PARTY_LICENSES.md','FORK-NOTICE.md','DEPENDENCY-SOURCES.md')) {
+    foreach ($name in @('LICENSE','THIRD_PARTY_LICENSES.md','FORK-NOTICE.md','DEPENDENCY-SOURCES.md','BUILD-GOOGLE-PING.md')) {
         Copy-Item -LiteralPath (Join-Path $sourceRoot $name) -Destination $PackageDir
     }
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'PREMIUM-PING.md') -Destination (Join-Path $PackageDir 'README.md')

@@ -29,7 +29,9 @@ QVariantMap measureAddress(const QHostAddress &address, const std::shared_ptr<st
     const bool ipv6 = address.protocol() == QAbstractSocket::IPv6Protocol;
     HANDLE handle = ipv6 ? Icmp6CreateFile() : IcmpCreateFile();
     if (handle == INVALID_HANDLE_VALUE) {
-        return result("error");
+        auto failure = result("error");
+        failure["errorCode"] = quint32(GetLastError());
+        return failure;
     }
 
     char payload[] = "Amnezia latency";
@@ -37,6 +39,7 @@ QVariantMap measureAddress(const QHostAddress &address, const std::shared_ptr<st
     // is suitably aligned for either reply structure.
     std::vector<unsigned char> buffer(sizeof(ICMP_ECHO_REPLY) + sizeof(ICMPV6_ECHO_REPLY) + sizeof(payload) + 64);
     std::vector<int> samples;
+    DWORD lastStatus = IP_REQ_TIMED_OUT;
     for (int i = 0; i < 3 && !cancelled->load(); ++i) {
         std::fill(buffer.begin(), buffer.end(), 0);
         DWORD count = 0;
@@ -55,6 +58,7 @@ QVariantMap measureAddress(const QHostAddress &address, const std::shared_ptr<st
             count = Icmp6SendEcho2(handle, nullptr, nullptr, nullptr, &source, &destination,
                                   payload, sizeof(payload), nullptr, buffer.data(), DWORD(buffer.size()), 1000);
             const auto *reply = reinterpret_cast<const ICMPV6_ECHO_REPLY *>(buffer.data());
+            lastStatus = count ? reply->Status : GetLastError();
             if (count > 0 && reply->Status == IP_SUCCESS) {
                 samples.push_back(int(reply->RoundTripTime));
             }
@@ -63,10 +67,31 @@ QVariantMap measureAddress(const QHostAddress &address, const std::shared_ptr<st
             count = IcmpSendEcho(handle, destination, payload, sizeof(payload), nullptr,
                                  buffer.data(), DWORD(buffer.size()), 1000);
             const auto *reply = reinterpret_cast<const ICMP_ECHO_REPLY *>(buffer.data());
+            lastStatus = count ? reply->Status : GetLastError();
             // An unreachable/TTL-exceeded reply must never become a low ping.
             if (count > 0 && reply->Status == IP_SUCCESS && reply->Address == destination) {
                 samples.push_back(int(reply->RoundTripTime));
             }
+        }
+        switch (lastStatus) {
+        case IP_SUCCESS:
+        case IP_REQ_TIMED_OUT:
+        case IP_DEST_NET_UNREACHABLE:
+        case IP_DEST_HOST_UNREACHABLE:
+        case IP_DEST_PROT_UNREACHABLE:
+        case IP_DEST_PORT_UNREACHABLE:
+        case IP_TTL_EXPIRED_TRANSIT:
+        case IP_TTL_EXPIRED_REASSEM:
+        case IP_PACKET_TOO_BIG:
+        case IP_BAD_ROUTE:
+        case IP_PARAM_PROBLEM:
+            break;
+        default: {
+            IcmpCloseHandle(handle);
+            auto failure = result("error");
+            failure["errorCode"] = quint32(lastStatus);
+            return failure;
+        }
         }
     }
     IcmpCloseHandle(handle);
@@ -74,7 +99,9 @@ QVariantMap measureAddress(const QHostAddress &address, const std::shared_ptr<st
         return result("cancelled");
     }
     if (samples.empty()) {
-        return result("timeout");
+        auto failure = result("timeout");
+        failure["errorCode"] = quint32(lastStatus);
+        return failure;
     }
     std::sort(samples.begin(), samples.end());
     const int middle = int(samples.size()) / 2;

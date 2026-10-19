@@ -3482,6 +3482,40 @@ Create one from the current settings.</source>
 </context>
 <context>
     <name>PageSettingsApiAvailableCountries</name>
+    <message><source>Server ping: no ICMP reply</source><translation>Пинг сервера: нет ответа ICMP</translation></message>
+    <message><source>Server ping: Windows error %1</source><translation>Пинг сервера: ошибка Windows %1</translation></message>
+    <message>
+        <source>Server ping: —</source>
+        <translation>Пинг сервера: —</translation>
+    </message>
+    <message>
+        <source>Server ping: checking...</source>
+        <translation>Пинг сервера: проверка…</translation>
+    </message>
+    <message>
+        <source>Server ping: %1</source>
+        <translation>Пинг сервера: %1</translation>
+    </message>
+    <message>
+        <source>Server ping: timeout</source>
+        <translation>Пинг сервера: тайм-аут</translation>
+    </message>
+    <message>
+        <source>Server ping: error</source>
+        <translation>Пинг сервера: ошибка</translation>
+    </message>
+    <message>
+        <source>Stop server ping</source>
+        <translation>Остановить пинг серверов</translation>
+    </message>
+    <message>
+        <source>Ping all servers · 3 requests</source>
+        <translation>Пинг всех серверов · 3 запроса</translation>
+    </message>
+    <message>
+        <source>Current route. No VPN switching. Unknown address: —</source>
+        <translation>Текущий маршрут. Без переключения VPN. Адрес неизвестен: —</translation>
+    </message>
     <message><source>HTTPS through VPN: %1</source><translation>HTTPS через VPN: %1</translation></message>
     <message><source>HTTPS request timed out</source><translation>Нет ответа на HTTPS-запрос</translation></message>
     <message><source>Could not verify the VPN route</source><translation>Не удалось подтвердить маршрут через VPN</translation></message>
@@ -3729,8 +3763,8 @@ Create one from the current settings.</source>
         <translation>Проверить эту страну: 30 запросов</translation>
     </message>
     <message>
-        <source>v5 · Star: favorites. Arrows: recheck 30 pings. Latest check first, earlier results dated below. Sorted by loss, P95, median and variation. App split tunneling must be off; Google must use VPN.</source>
-        <translation>v5 · Звезда — избранное, стрелки — повторные 30 запросов. Новая проверка сверху, прежние замеры с датой ниже. Порядок: потери, P95, медиана, разброс. Выключите раздельное туннелирование приложений; Google должен идти через VPN.</translation>
+        <source>v5.2 · Speedometer: ping known servers without reconnecting. Stars: favorites. Arrows: detailed checks.</source>
+        <translation>v5.2 · Спидометр — пинг известных серверов без переподключения. Звезда — избранное. Стрелки — подробная проверка.</translation>
     </message>
 </context>
 <context>
@@ -7445,6 +7479,11 @@ Remove the server from the app to continue.</source>
     <name>PremiumBenchmarkController</name>
 
     <message>
+        <source>Configuration request timed out. Select the original location and reconnect manually.</source>
+        <translation>Время запроса конфигурации истекло. Выберите исходную страну и подключитесь вручную.</translation>
+    </message>
+
+    <message>
         <source>Could not resolve google.com</source>
         <translation>Не удалось определить адрес google.com</translation>
     </message>
@@ -7596,5 +7635,12 @@ Remove the server from the app to continue.</source>
         <source> · about %1 sec remaining</source>
         <translation> · осталось около %1 с</translation>
     </message>
+</context>
+<context>
+    <name>PremiumLatencyController</name>
+    <message><source>No known server addresses. Connect to a location once to remember its address. Unknown: —</source><translation>Нет известных адресов серверов. Один раз подключитесь к стране, чтобы запомнить её адрес. Неизвестные: —</translation></message>
+    <message><source>Pinging servers: %1 of %2 complete. Unknown addresses: %3.</source><translation>Пинг серверов: проверено %1 из %2. Неизвестных адресов: %3.</translation></message>
+    <message><source>Server ping: %1/%2 replied; no reply: %3; errors: %4; unknown: %5.</source><translation>Пинг серверов: ответили %1/%2; без ответа: %3; ошибок: %4; неизвестных: %5.</translation></message>
+    <message><source>A server can block ICMP while the VPN still works.</source><translation>Сервер может блокировать ICMP, хотя VPN работает.</translation></message>
 </context>
 </TS>

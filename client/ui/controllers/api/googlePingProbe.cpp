@@ -76,7 +76,30 @@ QVariantMap measure(const QHostAddress &destination, const std::shared_ptr<std::
         elapsed.start();
         const DWORD count = IcmpSendEcho2Ex(handle, nullptr, nullptr, nullptr, qToBigEndian(source.toIPv4Address()),
             address, payload, sizeof(payload), nullptr, buffer.data(), DWORD(buffer.size()), settings.timeoutMs);
+        const DWORD lastError = count ? NO_ERROR : GetLastError();
         const auto *reply = reinterpret_cast<const ICMP_ECHO_REPLY *>(buffer.data());
+        const DWORD failure = count ? reply->Status : lastError;
+        if (failure != IP_SUCCESS) {
+            switch (failure) {
+            case IP_REQ_TIMED_OUT:
+            case IP_DEST_NET_UNREACHABLE:
+            case IP_DEST_HOST_UNREACHABLE:
+            case IP_DEST_PROT_UNREACHABLE:
+            case IP_DEST_PORT_UNREACHABLE:
+            case IP_TTL_EXPIRED_TRANSIT:
+            case IP_TTL_EXPIRED_REASSEM:
+            case IP_PACKET_TOO_BIG:
+            case IP_BAD_ROUTE:
+            case IP_PARAM_PROBLEM:
+                break; // Network failures are observed missing replies.
+            default:
+                // A local API failure says nothing about the quality of a country.
+                IcmpCloseHandle(handle);
+                result["state"] = "pingError";
+                result["errorCode"] = quint32(failure);
+                return result;
+            }
+        }
         if (i >= settings.warmupCount) {
             if (count > 0 && reply->Status == IP_SUCCESS && reply->Address == address) {
                 observations.append(int(reply->RoundTripTime));

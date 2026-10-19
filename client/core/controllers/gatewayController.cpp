@@ -273,25 +273,45 @@ ErrorCode GatewayController::post(const QString &endpoint, const QJsonObject api
     return ErrorCode::NoError;
 }
 
-QFuture<QPair<ErrorCode, QByteArray>> GatewayController::postAsync(const QString &endpoint, const QJsonObject apiPayload)
+QFuture<QPair<ErrorCode, QByteArray>> GatewayController::postAsync(const QString &endpoint, const QJsonObject apiPayload,
+                                                                int totalTimeoutMsecs)
 {
     auto promise = QSharedPointer<QPromise<QPair<ErrorCode, QByteArray>>>::create();
     promise->start();
+    if (m_asyncDeadline.expired()) {
+        promise->addResult(qMakePair(ErrorCode::ApiConfigTimeoutError, QByteArray()));
+        promise->finish();
+        return promise->future();
+    }
+    if (totalTimeoutMsecs > 0) {
+        // Use a dedicated GatewayController for a bounded operation. Expiry
+        // aborts its transport before completing the future, including fallback
+        // discovery/health requests, and queued continuations cannot restart it.
+        m_asyncDeadline.start(totalTimeoutMsecs, [promise]() {
+            if (promise->future().isFinished()) return;
+            promise->addResult(qMakePair(ErrorCode::ApiConfigTimeoutError, QByteArray()));
+            promise->finish();
+        });
+    }
 
     EncryptedRequestData encRequestData = prepareRequest(endpoint, apiPayload);
+    if (m_asyncDeadline.expired()) return promise->future();
     if (encRequestData.errorCode != ErrorCode::NoError) {
+        m_asyncDeadline.complete();
         promise->addResult(qMakePair(encRequestData.errorCode, QByteArray()));
         promise->finish();
         return promise->future();
     }
 
     QNetworkReply *reply = amnApp->networkManager()->post(encRequestData.request, encRequestData.requestBody);
+    m_asyncDeadline.track(reply);
 
     auto sslErrors = QSharedPointer<QList<QSslError>>::create();
 
     connect(reply, &QNetworkReply::sslErrors, [sslErrors](const QList<QSslError> &errors) { *sslErrors = errors; });
 
     connect(reply, &QNetworkReply::finished, this, [promise, sslErrors, encRequestData, endpoint, apiPayload, reply, this]() mutable {
+        if (m_asyncDeadline.expired()) return;
         QByteArray encryptedResponseBody = reply->readAll();
         QString replyErrorString = reply->errorString();
         auto replyError = reply->error();
@@ -302,9 +322,11 @@ QFuture<QPair<ErrorCode, QByteArray>> GatewayController::postAsync(const QString
         auto decryptionResult =
                 tryDecryptResponseBody(encryptedResponseBody, replyError, encRequestData.key, encRequestData.iv, encRequestData.salt);
 
-        auto processResponse = [promise, encRequestData](const GatewayController::DecryptionResult &decryptionResult,
+        auto processResponse = [this, promise, encRequestData](const GatewayController::DecryptionResult &decryptionResult,
                                                          const QList<QSslError> &sslErrors, QNetworkReply::NetworkError replyError,
                                                          const QString &replyErrorString, int httpStatusCode) {
+            if (promise->future().isFinished()) return;
+            m_asyncDeadline.complete();
             auto errorCode = apiUtils::checkNetworkReplyErrors(sslErrors, replyErrorString, replyError, httpStatusCode,
                                                                decryptionResult.decryptedBody);
             if (errorCode) {
@@ -608,6 +630,7 @@ void GatewayController::bypassProxy(const QString &endpoint, const QString &serv
 void GatewayController::getProxyUrlsAsync(const QStringList proxyStorageUrls, const int currentProxyStorageIndex,
                                           const QString &proxyUrlsCacheKey, std::function<void(const QStringList &)> onComplete)
 {
+    if (m_asyncDeadline.expired()) return;
     const QByteArray cachedProxyUrlsEncrypted = m_appSettingsRepository->readGatewayProxyUrls(proxyUrlsCacheKey);
 
     if (currentProxyStorageIndex >= proxyStorageUrls.size()) {
@@ -621,11 +644,13 @@ void GatewayController::getProxyUrlsAsync(const QStringList proxyStorageUrls, co
     request.setUrl(proxyStorageUrls[currentProxyStorageIndex]);
 
     QNetworkReply *reply = amnApp->networkManager()->get(request);
+    m_asyncDeadline.track(reply);
 
     // connect(reply, &QNetworkReply::sslErrors, this, [state](const QList<QSslError> &e) { *(state->sslErrors) = e; });
 
     connect(reply, &QNetworkReply::finished, this,
             [this, proxyStorageUrls, currentProxyStorageIndex, proxyUrlsCacheKey, onComplete, reply]() {
+        if (m_asyncDeadline.expired()) return;
         if (reply->error() == QNetworkReply::NoError) {
             QByteArray encrypted = reply->readAll();
             reply->deleteLater();
@@ -660,6 +685,7 @@ void GatewayController::getProxyUrlsAsync(const QStringList proxyStorageUrls, co
 void GatewayController::getProxyUrlAsync(const QStringList proxyUrls, const int currentProxyIndex,
                                          std::function<void(const QString &)> onComplete)
 {
+    if (m_asyncDeadline.expired()) return;
     if (currentProxyIndex >= proxyUrls.size()) {
         onComplete("");
         return;
@@ -671,12 +697,14 @@ void GatewayController::getProxyUrlAsync(const QStringList proxyUrls, const int 
     request.setUrl(proxyUrls[currentProxyIndex] + "lmbd-health");
 
     QNetworkReply *reply = amnApp->networkManager()->get(request);
+    m_asyncDeadline.track(reply);
 
     // connect(reply, &QNetworkReply::sslErrors, this, [state](const QList<QSslError> &e) {
     //     *(state->sslErrors) = e;
     // });
 
     connect(reply, &QNetworkReply::finished, this, [this, proxyUrls, currentProxyIndex, onComplete, reply]() {
+        if (m_asyncDeadline.expired()) return;
         reply->deleteLater();
 
         if (reply->error() == QNetworkReply::NoError) {
@@ -694,6 +722,7 @@ void GatewayController::bypassProxyAsync(
         const QString &endpoint, const QString &proxyUrl, EncryptedRequestData encRequestData,
         std::function<void(const QByteArray &, bool, const QList<QSslError> &, QNetworkReply::NetworkError, const QString &, int)> onComplete)
 {
+    if (m_asyncDeadline.expired()) return;
     auto sslErrors = QSharedPointer<QList<QSslError>>::create();
     if (proxyUrl.isEmpty()) {
         onComplete(QByteArray(), false, *sslErrors, QNetworkReply::InternalServerError, "empty proxy url", 0);
@@ -704,10 +733,12 @@ void GatewayController::bypassProxyAsync(
     request.setUrl(endpoint.arg(proxyUrl));
 
     QNetworkReply *reply = amnApp->networkManager()->post(request, encRequestData.requestBody);
+    m_asyncDeadline.track(reply);
 
     connect(reply, &QNetworkReply::sslErrors, this, [sslErrors](const QList<QSslError> &errors) { *sslErrors = errors; });
 
     connect(reply, &QNetworkReply::finished, this, [sslErrors, onComplete, encRequestData, reply, this]() {
+        if (m_asyncDeadline.expired()) return;
         QByteArray encryptedResponseBody = reply->readAll();
         QString replyErrorString = reply->errorString();
         auto replyError = reply->error();

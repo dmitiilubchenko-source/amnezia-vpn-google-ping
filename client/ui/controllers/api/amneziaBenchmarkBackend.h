@@ -23,6 +23,7 @@ public:
               quint64 requestId, std::shared_ptr<std::atomic_bool> cancelled) override;
     void connectVpn() override;
     void disconnectVpn() override;
+    bool configurationPending() const override { return m_pendingLoads > 0; }
     QVariantMap preferences(const QString &id) const override;
     void savePreferences(const QString &id, const QVariantMap &preferences) override;
 private:
@@ -33,5 +34,6 @@ private:
     SubscriptionController *m_subscription;
     SecureQSettings *m_storage;
     bool m_failed = false;
+    int m_pendingLoads = 0;
 };
 #endif

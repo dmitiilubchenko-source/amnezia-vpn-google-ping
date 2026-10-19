@@ -37,6 +37,7 @@ class LocalSocketController final : public ControllerImpl {
   bool multihopSupported() override { return true; }
 
  private:
+  friend class TestPremiumLatency;
   void initializeInternal();
   void disconnectInternal();
 

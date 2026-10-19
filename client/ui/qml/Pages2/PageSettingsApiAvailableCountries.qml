@@ -62,6 +62,17 @@ PageType {
         return value === 0 ? qsTr("<1 ms") : qsTr("%1 ms").arg(numberText(value))
     }
 
+    function serverPingText(code) {
+        const result = PremiumLatencyController.results[code]
+        if (!result || result.state === "unknown" || result.state === "idle") return qsTr("Server ping: —")
+        if (result.state === "checking") return qsTr("Server ping: checking...")
+        if (result.state === "ready") return qsTr("Server ping: %1").arg(timeText(result.latencyMs))
+        if (result.state === "timeout") return qsTr("Server ping: no ICMP reply")
+        if (result.state === "dnsError") return qsTr("Could not resolve server address")
+        if (result.errorCode) return qsTr("Server ping: Windows error %1").arg(result.errorCode)
+        return qsTr("Server ping: error")
+    }
+
     function latencyText(measurement) {
         const state = measurement ? measurement.state : "unknown"
         if (state === "ready") {
@@ -291,15 +302,47 @@ PageType {
                 }
             }
 
-            ParagraphTextType {
+            RowLayout {
                 Layout.fillWidth: true
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
                 Layout.topMargin: (root.subscriptionExpired || root.subscriptionExpiringSoon) ? 12 : 4
                 Layout.bottomMargin: 8
-
-                text: qsTr("Location for connection")
-                color: AmneziaStyle.color.mutedGray
+                ParagraphTextType {
+                    Layout.fillWidth: true
+                    text: qsTr("Location for connection")
+                    color: AmneziaStyle.color.mutedGray
+                }
+                ToolButton {
+                    id: pingAllServersButton
+                    objectName: "pingAllServersButton"
+                    visible: PremiumLatencyController.supported && PremiumLatencyController.isPremium
+                    enabled: !BenchmarkController.busy && (PremiumLatencyController.available || PremiumLatencyController.busy)
+                    implicitWidth: 40; implicitHeight: 40
+                    Accessible.name: PremiumLatencyController.busy ? qsTr("Stop server ping") : qsTr("Ping all servers · 3 requests")
+                    ToolTip.visible: hovered
+                    ToolTip.text: Accessible.name + "\n" + qsTr("Current route. No VPN switching. Unknown address: —")
+                    background: Rectangle { radius: 8; color: pingAllServersButton.hovered ? AmneziaStyle.color.charcoalGray : "transparent" }
+                    contentItem: Item {
+                        Image {
+                            anchors.centerIn: parent
+                            visible: !PremiumLatencyController.busy
+                            source: "qrc:/images/controls/gauge.svg"
+                            sourceSize.width: 24; sourceSize.height: 24
+                            opacity: pingAllServersButton.enabled ? 1 : 0.35
+                        }
+                        BusyIndicator {
+                            anchors.centerIn: parent
+                            width: 24; height: 24
+                            running: PremiumLatencyController.busy
+                            visible: running
+                        }
+                    }
+                    onClicked: {
+                        if (PremiumLatencyController.busy) PremiumLatencyController.cancel()
+                        else PremiumLatencyController.checkAll(ServersUiController.processedServerId)
+                    }
+                }
             }
 
             BasicButtonType {
@@ -308,7 +351,7 @@ PageType {
                 Layout.fillWidth: true
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
-                enabled: BenchmarkController.canStart || BenchmarkController.busy
+                enabled: !PremiumLatencyController.busy && (BenchmarkController.canStart || BenchmarkController.busy)
                 text: BenchmarkController.busy ? qsTr("Stop test") : qsTr("Check all locations · Google")
                 clickedFunc: function() {
                     if (BenchmarkController.busy) BenchmarkController.stop()
@@ -327,7 +370,7 @@ PageType {
                     objectName: "checkFavoritesButton"
                     Layout.fillWidth: true
                     Layout.preferredWidth: 1
-                    enabled: BenchmarkController.canStart && BenchmarkController.favoriteCount > 0
+                    enabled: !PremiumLatencyController.busy && BenchmarkController.canStart && BenchmarkController.favoriteCount > 0
                     buttonTextLabel.font.pixelSize: 14
                     text: qsTr("Favorites (%1)").arg(BenchmarkController.favoriteCount)
                     clickedFunc: function() { root.confirmTest("favorites") }
@@ -335,7 +378,7 @@ PageType {
                 BasicButtonType {
                     Layout.fillWidth: true
                     Layout.preferredWidth: 1
-                    enabled: BenchmarkController.canMeasure
+                    enabled: !PremiumLatencyController.busy && BenchmarkController.canMeasure
                     buttonTextLabel.font.pixelSize: 14
                     text: qsTr("Current · 30 pings")
                     clickedFunc: function() { BenchmarkController.checkCurrent() }
@@ -401,6 +444,16 @@ PageType {
             }
 
             CaptionTextType {
+                visible: PremiumLatencyController.isPremium && PremiumLatencyController.status !== ""
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                Layout.topMargin: 8
+                text: PremiumLatencyController.status
+                color: AmneziaStyle.color.paleGray
+            }
+
+            CaptionTextType {
                 visible: PremiumLatencyController.supported && PremiumLatencyController.isPremium
                 Layout.fillWidth: true
                 Layout.leftMargin: 16
@@ -408,7 +461,7 @@ PageType {
                 Layout.topMargin: 8
                 Layout.bottomMargin: 12
                 color: AmneziaStyle.color.mutedGray
-                text: qsTr("v5 · Star: favorites. Arrows: recheck 30 pings. Latest check first, earlier results dated below. Sorted by loss, P95, median and variation. App split tunneling must be off; Google must use VPN.")
+                text: qsTr("v5.2 · Speedometer: ping known servers without reconnecting. Stars: favorites. Arrows: detailed checks.")
             }
         }
 
@@ -430,7 +483,7 @@ PageType {
 
                     text: content.locationName
                     descriptionText: PremiumLatencyController.supported && PremiumLatencyController.isPremium
-                        ? root.latencyText(modelData) : ""
+                        ? root.serverPingText(content.locationCode) + (modelData.state ? "\n" + root.latencyText(modelData) : "") : ""
 
                     ButtonGroup.group: containersRadioButtonGroup
 
@@ -498,7 +551,7 @@ PageType {
                         id: recheckButton
                         objectName: "recheck-" + content.locationCode
                         visible: PremiumLatencyController.supported && PremiumLatencyController.isPremium
-                        enabled: BenchmarkController.canStart
+                        enabled: !PremiumLatencyController.busy && BenchmarkController.canStart
                         implicitWidth: 36; implicitHeight: 32
                         Accessible.name: qsTr("Recheck this location with 30 pings")
                         ToolTip.visible: hovered
